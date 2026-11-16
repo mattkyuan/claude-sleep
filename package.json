@@ -1,0 +1,10 @@
+{
+  "name": "claude-sleep",
+  "version": "0.1.0",
+  "description": "Memory upkeep for Claude Code: see which memories are used, check the folder, archive what is not.",
+  "license": "MIT",
+  "type": "module",
+  "bin": { "claude-sleep": "sleep.mjs" },
+  "engines": { "node": ">=18" },
+  "scripts": { "test": "node --test tests/" }
+}
