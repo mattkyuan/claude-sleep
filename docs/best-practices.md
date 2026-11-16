@@ -16,7 +16,7 @@ These rules come from measuring one large memory folder (833 files) against 30 d
 4. **Write files that grep can find** (checks: `orphans`, `trackable`). A file nothing links to is fine if its name and text use the words someone would search for. Give each file at least one full sentence, so its use can be measured too.
 5. **Protect what must never expire, but keep it sharp.** User and feedback memories, and anything they link to, are never archived. Neither is anything MEMORY.md links to directly. A feedback memory that goes unused for the window is queued for consolidation instead: merged with related lessons into fewer, sharper files. Age is measured from when a file was created, so a tidy-up that edits every file doesn't reset it.
 6. **Hubs are optional.** A hub file that lists related memories keeps MEMORY.md short. It does not guarantee the agent finds those memories; grep goes around it.
-7. **Archive, don't delete, and search the archive last.** Archived files move to `memory-archive/`, next to `memory/` rather than inside it, so ordinary searches don't hit them. One line in MEMORY.md tells the agent to look there only after `memory/` turns up nothing.
+7. **Archive, don't delete, and search the archive last.** Archived files move to `memory/memory-archive/`, and queued feedback to `memory/consolidate/`. Both are inside the memory folder, so a recursive grep still reaches them. One line in MEMORY.md tells the agent to look there only after the main files turn up nothing. Links to a moved file are rewritten rather than deleted, and the folder's own git history records every run. Deleting archived files (`--purge-after`) is off unless you turn it on.
 
 ## How sleep measures use
 
