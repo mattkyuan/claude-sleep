@@ -46,6 +46,7 @@ node sleep.mjs archive --apply --project ~/code/my-project
 | `restore <file>` | Puts a moved file back where it was, links and all. `--all` undoes every move. |
 | `queue` | The consolidation queue, grouped by the hub that links to each memory |
 | `merged --into <file> <queued>...` | Records a merge the skill wrote: archives the sources and points their links at the merged file |
+| `review --serve [--port N]` | The same page on 127.0.0.1, where you decide: tick or untick each move, Move all or Keep all per hub, Apply; approve a merge draft, or leave Claude a note to redo it. The address carries a private key; every action is checked against sleep's own plan and runs the command line, so it is committed and can be undone. |
 | `review [--open]` | A local page with every proposed move, its evidence, each link edit as before and after, and merge drafts beside their sources. Changes nothing. An `archive` dry run writes one too. |
 | `stats` | Memory size over time, and sleep's error rate: files restored after archiving, or read again from the archive |
 
@@ -55,6 +56,7 @@ node sleep.mjs archive --apply --project ~/code/my-project
 | `--days N` | How long a file must go unused before it moves (default 60) |
 | `--apply` | Actually move files |
 | `--purge-after N` | Delete archived files that nothing has read for N days since they were archived (default: never) |
+| `--only FILE` | archive: move only the planned files named in FILE, a JSON list (what the served page sends); no purge |
 | `--out DIR`, `--state DIR` | Where reports and sleep's own records go (default: `sleep/` next to the memory folder) |
 | `--json` | Print the result as json instead of writing a report |
 

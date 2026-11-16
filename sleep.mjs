@@ -14,6 +14,8 @@ import { parseSchedule, describe, command, plist, cronLine, install, remove, lab
 import { fileURLToPath } from "node:url";
 import { frontmatter } from "./lib/memory.mjs";
 import { reviewHtml } from "./lib/review.mjs";
+import { startServer } from "./lib/serve.mjs";
+import { spawn } from "node:child_process";
 
 const CLI = fileURLToPath(import.meta.url);
 const loadConfig = (state) => { try { const c = JSON.parse(fs.readFileSync(path.join(state, "config.json"), "utf8")); return c && typeof c === "object" ? c : {}; } catch { return {}; } };
@@ -28,6 +30,7 @@ Usage:
   sleep schedule [--every daily|weekly|monthly] [--day D] [--at HH:MM] [--mode report|archive] [--off]
                                   run sleep on its own (report only unless --mode archive); no flags shows it
   sleep review [--open]           a local page with every proposed move, link edit and merge draft; changes nothing
+  sleep review --serve [--port N] the same page on 127.0.0.1, where you pick moves, approve merges and leave notes
   sleep stats [options]           how well sleep is doing: size over time, restores and re-reads (its error rate), merges
   sleep queue [options]           the consolidation queue, grouped by the hub that links to each memory
   sleep merged --into <file> <queued>...  record a merge: archive the sources, point their links at <file>
@@ -36,7 +39,9 @@ Options:
   --project DIR      the project whose memory to read (default: the current folder)
   --days N           a file must go unused this many days before it moves (default ${DEFAULTS.days})
   --apply            archive: actually move files (and purge, if a purge window is set)
+  --port N           review --serve: the port (default 8767; a free one if taken)
   --purge-after N    archive: delete files archived over N days ago and unused since (default: never)
+  --only FILE        archive: move only the planned files named in FILE (a JSON list); no purge
   --out DIR          where to write the report (default: <project data>/sleep/reports)
   --state DIR        where sleep keeps its ledger and moves (default: <project data>/sleep)
   --json             print the result as json instead of writing a report
@@ -53,7 +58,7 @@ function parse(argv) {
     const a = argv[i];
     if (!a.startsWith("--")) { o.args.push(a); continue; }
     const k = a.slice(2);
-    if (["json", "help", "apply", "all", "off", "open"].includes(k)) o.flags[k] = true;
+    if (["json", "help", "apply", "all", "off", "open", "serve"].includes(k)) o.flags[k] = true;
     else { if (i + 1 >= argv.length) throw new Error(`${a} needs a value`); o.flags[k] = argv[++i]; }
   }
   return o;
@@ -175,10 +180,20 @@ function purgeDays(flags, state) {
   return n;
 }
 
+// --only: a JSON list of names. Only planned moves whose name is on it go ahead; a name the plan does not hold is ignored.
+function onlyList(flags) {
+  if (flags.only == null) return null;
+  let v; try { v = JSON.parse(fs.readFileSync(path.resolve(untilde(flags.only)), "utf8")); } catch { throw new Error("--only needs a file holding a JSON list of file names"); }
+  if (!Array.isArray(v) || !v.every((x) => typeof x === "string")) throw new Error("--only needs a file holding a JSON list of file names");
+  return new Set(v);
+}
+
 async function archive(flags) {
   const ctx = await context(flags);
-  const planned = planMoves(ctx.memDir, ctx.cand.list, ctx.cand.consolidate);
-  const purge = purgeList(ctx, purgeDays(flags, ctx.state));
+  const only = onlyList(flags);
+  const keep = (list) => (only ? list.filter((c) => only.has(c.name)) : list);
+  const planned = planMoves(ctx.memDir, keep(ctx.cand.list), keep(ctx.cand.consolidate));
+  const purge = only ? [] : purgeList(ctx, purgeDays(flags, ctx.state));
   const r = { ...buildReport(ctx, flags.apply ? "archive" : "archive (dry run)"), applied: !!flags.apply, moves: planned, purged: purge.map((m) => m.to), commits: {} };
   if (flags.apply && (planned.length || purge.length)) {
     ensureRepo(ctx.memDir);
@@ -239,7 +254,7 @@ async function queue(flags) {
   }
   const list = [...topics].map(([topic, files]) => ({ topic, files: files.sort((a, b) => a.name.localeCompare(b.name)) }))
     .sort((a, b) => (a.topic === "unfiled") - (b.topic === "unfiled") || b.files.length - a.files.length);
-  if (flags.json) { process.stdout.write(JSON.stringify({ memDir: ctx.memDir, drafts: path.join(ctx.state, "drafts"), queued: queued.length, topics: list }, null, 2) + "\n"); return; }
+  if (flags.json) { process.stdout.write(JSON.stringify({ memDir: ctx.memDir, drafts: path.join(ctx.state, "drafts"), notes: openNotes(ctx.state), queued: queued.length, topics: list }, null, 2) + "\n"); return; }
   console.log(`${queued.length} memories waiting to be merged, in ${list.length} topic(s):`);
   for (const t of list) console.log(`  ${t.topic}: ${t.files.length}`);
 }
@@ -263,6 +278,7 @@ async function merged(flags, sources) {
   ensureRepo(ctx.memDir);
   commitAll(ctx.memDir, "sleep: snapshot before merging", [into]);
   // An approved draft moves into memory without the line that named its sources.
+  if (loadNotes(ctx.state)[into]) saveNote(ctx.state, into, "");
   if (!fs.existsSync(path.join(ctx.memDir, into))) { fs.writeFileSync(path.join(ctx.memDir, into), fs.readFileSync(draft, "utf8").replace(SOURCES_LINE, "")); fs.unlinkSync(draft); }
   // Slugs the sources answer to (file name and frontmatter name), read before they move.
   const slugOf = (rel) => { const t = fs.readFileSync(path.join(ctx.memDir, rel), "utf8"); const n = /^name:\s*["']?([^\s"']+)/m.exec(t.slice(0, 600)); return [path.basename(rel, ".md"), n && n[1]].filter(Boolean); };
@@ -329,8 +345,28 @@ async function schedule(flags) {
 
 // Merge drafts the skill wrote to <state>/drafts, each naming its sources in a sleep_sources: line.
 const SOURCES_LINE = /^sleep_sources:.*\n/m;
+const DRAFT_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*\.md$/;
+// Notes for Claude about drafts, left on the review page. The skill reads them through queue --json.
+const notesFile = (state) => path.join(state, "notes.json");
+const loadNotes = (state) => { try { const v = JSON.parse(fs.readFileSync(notesFile(state), "utf8")); return v && typeof v === "object" && !Array.isArray(v) ? v : {}; } catch { return {}; } };
+// A note is open until the draft is rewritten after it; then Claude has handled it.
+function openNotes(state) {
+  const out = {};
+  for (const [d, v] of Object.entries(loadNotes(state))) {
+    let t = 0; try { t = fs.statSync(path.join(state, "drafts", d)).mtimeMs; } catch { continue; }
+    if (t <= Date.parse(v?.at || 0)) out[d] = v;
+  }
+  return out;
+}
+function saveNote(state, draft, note) {
+  const all = loadNotes(state);
+  if (note) all[draft] = { note, at: new Date().toISOString() }; else delete all[draft];
+  fs.mkdirSync(state, { recursive: true });
+  fs.writeFileSync(notesFile(state), JSON.stringify(all, null, 2) + "\n");
+}
 function readDrafts(ctx) {
   const dir = path.join(ctx.state, "drafts");
+  const notes = loadNotes(ctx.state), open = openNotes(ctx.state);
   let names = []; try { names = fs.readdirSync(dir).filter((n) => n.endsWith(".md")).sort(); } catch {}
   return names.map((name) => {
     const text = fs.readFileSync(path.join(dir, name), "utf8");
@@ -340,12 +376,12 @@ function readDrafts(ctx) {
       const f = ctx.live.files.find((x) => x.name === sn || x.rel === sn);
       return { name: sn, queued: f?.area === "consolidate", description: f?.description, body: f?.body, bytes: f?.bytes || 0 };
     });
-    return { name, description: typeof fm.description === "string" ? fm.description : "", body: text.replace(SOURCES_LINE, ""), sources, beforeBytes: sources.reduce((a, x) => a + x.bytes, 0), afterBytes: Buffer.byteLength(text.replace(SOURCES_LINE, "")) };
+    return { name, note: notes[name]?.note || "", noteOpen: !!open[name], description: typeof fm.description === "string" ? fm.description : "", body: text.replace(SOURCES_LINE, ""), sources, beforeBytes: sources.reduce((a, x) => a + x.bytes, 0), afterBytes: Buffer.byteLength(text.replace(SOURCES_LINE, "")) };
   });
 }
 
-// The review page for what archive would do now, plus any merge drafts. Writes nothing in memory.
-function writeReview(ctx, planned, purge) {
+// What archive would do now, plus any merge drafts, for the review page. Reads only.
+function reviewData(ctx, planned, purge) {
   const body = (rel) => ctx.mem.files.find((f) => f.rel === rel)?.body;
   const info = new Map([...ctx.cand.list, ...ctx.cand.consolidate].map((c) => [c.name, c]));
   const r = {
@@ -357,6 +393,11 @@ function writeReview(ctx, planned, purge) {
     drafts: readDrafts(ctx),
     queued: ctx.live.files.filter((f) => f.area === "consolidate").length,
   };
+  return r;
+}
+
+function writeReview(ctx, planned, purge) {
+  const r = reviewData(ctx, planned, purge);
   const out = path.join(ctx.state, "reports");
   fs.mkdirSync(out, { recursive: true });
   const file = path.join(out, `${r.generatedAt.replace(/[:.]/g, "-").replace("T", "-").slice(0, 19)}-review.html`);
@@ -365,12 +406,74 @@ function writeReview(ctx, planned, purge) {
 }
 
 async function review(flags) {
+  if (flags.serve) return serveReview(flags);
   const ctx = await context(flags);
   const planned = planMoves(ctx.memDir, ctx.cand.list, ctx.cand.consolidate);
   const file = writeReview(ctx, planned, purgeList(ctx, purgeDays(flags, ctx.state)));
   record(ctx, "review");
   console.log(`Review: ${file}`);
+  console.log(`To decide on the page: "${process.execPath}" "${CLI}" review --serve --project "${ctx.project}"`);
   if (flags.open) spawnOpen(file);
+}
+
+// Runs this command line as a child, the same way a person would, so the page's actions take the same path.
+function runCli(args) {
+  return new Promise((resolve) => {
+    const p = spawn(process.execPath, [CLI, ...args], { stdio: ["ignore", "pipe", "pipe"] });
+    let out = "", err = "";
+    p.stdout.on("data", (c) => (out += c));
+    p.stderr.on("data", (c) => (err += c));
+    p.on("close", (code) => resolve({ code, out, err }));
+  });
+}
+
+async function serveReview(flags) {
+  const loc = locate(flags);
+  const pass = ["--project", loc.project, "--state", loc.state, ...(flags.days != null ? ["--days", String(flags.days)] : [])];
+  const fail = (r) => { throw new Error((r.err || r.out).trim().split("\n").pop() || "The command failed."); };
+  const draftNamed = (v) => { const d = String(v || ""); if (!DRAFT_NAME.test(d) || !fs.existsSync(path.join(loc.state, "drafts", d))) throw new Error("No such draft."); return d; };
+  const actions = {
+    async "/apply"(body) {
+      const names = body?.moves;
+      if (!Array.isArray(names) || !names.length || !names.every((x) => typeof x === "string")) throw new Error("Pick at least one move.");
+      const tmp = path.join(loc.state, `only-${process.pid}.json`);
+      fs.mkdirSync(loc.state, { recursive: true });
+      fs.writeFileSync(tmp, JSON.stringify(names));
+      try {
+        const r = await runCli(["archive", "--apply", "--only", tmp, ...pass]);
+        if (r.code !== 0) fail(r);
+        return { message: r.out.trim().split("\n")[0] };
+      } finally { fs.rmSync(tmp, { force: true }); }
+    },
+    async "/merge"(body) {
+      const d = draftNamed(body?.draft);
+      if (fs.existsSync(path.join(loc.memDir, d))) throw new Error(`A memory named ${d} already exists. Rename the draft first.`);
+      const { fm } = frontmatter(fs.readFileSync(path.join(loc.state, "drafts", d), "utf8"));
+      const sources = String(fm.sleep_sources || "").split(",").map((x) => x.trim()).filter(Boolean);
+      if (!sources.length) throw new Error(`${d} names no sources.`);
+      const r = await runCli(["merged", "--into", d, ...sources, ...pass]);
+      if (r.code !== 0) fail(r);
+      return { message: r.out.trim().split("\n")[0] };
+    },
+    async "/note"(body) {
+      const d = draftNamed(body?.draft);
+      const note = String(body?.note ?? "").trim();
+      if (note.length > 4000) throw new Error("Keep the note under 4,000 characters.");
+      saveNote(loc.state, d, note);
+      return { message: note ? "Note saved." : "Note cleared." };
+    },
+  };
+  const render = async (nonce, token) => {
+    const ctx = await context(flags);
+    const planned = planMoves(ctx.memDir, ctx.cand.list, ctx.cand.consolidate);
+    return reviewHtml(reviewData(ctx, planned, purgeList(ctx, purgeDays(flags, ctx.state))), { nonce, token });
+  };
+  const port = flags.port != null ? Number(flags.port) : 8767;
+  if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error("--port must be a port number");
+  const { url } = await startServer({ port, render, actions });
+  console.log(`Review: ${url}`);
+  console.log("The address holds a private key: keep it to yourself. Press Ctrl+C to stop.");
+  if (flags.open) spawnOpen(url);
 }
 
 function spawnOpen(file) {

@@ -56,15 +56,15 @@ Pick the flow from the arguments. With none, run **report**, then offer archive 
 
 ## archive
 
-1. Run `archive` (a dry run). It prints `Review: <path>`, a local page with every move, its evidence and every link edit. Give the user that path, and summarize: how many go to the archive, how many to the merge queue, a few example names.
-2. Ask before running `archive --apply`.
+1. Run `archive` (a dry run). It prints `Review: <path>`, a local page with every move, its evidence and every link edit. Give the user that path, and summarize: how many go to the archive, how many to the merge queue, a few example names. To pick moves one by one, the user can run the `review --serve` command that `review` prints (paths already filled in) in their own terminal; it serves the page on 127.0.0.1 with Move and Keep boxes and an Apply button. Don't start it yourself: it runs until stopped.
+2. Ask before running `archive --apply`, unless the user applied from the served page.
 3. After it runs, give the commit hashes from the report, and how to undo: `restore <file>`, or `restore --all` for the whole run.
 
 ## consolidate
 
 Merging is the one place where you write memory. Work on one topic per run unless the user asks for more.
 
-1. Run `queue --json`. It returns `memDir`, the `drafts` folder, and the queued memories grouped by the file that links to them (usually a hub). Show the topics with their counts, and ask which one to merge, largest first. With more than about 12 files in a topic, take them in batches of about 10.
+1. Run `queue --json`. It returns `memDir`, the `drafts` folder, `notes` (what the user asked you to change in a draft, left on the review page), and the queued memories grouped by the file that links to them (usually a hub). If `notes` has entries, redo those drafts first: read the note, rewrite the draft in the drafts folder to follow it, and say what changed. Otherwise show the topics with their counts, and ask which one to merge, largest first. With more than about 12 files in a topic, take them in batches of about 10.
 2. Read every memory in the batch (`<memDir>/<rel>`) and the hub that links to them.
 3. Group the memories that state the same rule or lesson. Draft one merged memory per group, not one per topic. A memory that fits no group stays queued; don't force it.
 4. Write each merged memory so that it:
@@ -72,7 +72,7 @@ Merging is the one place where you write memory. Work on one topic per run unles
    - keeps the **Why:** and **How to apply:** lines; where sources disagree, follows the newest and notes the older view in one line;
    - starts with frontmatter like the sources: `name` (matching the file name), a `description` of 150 characters or fewer using the words someone would search for, and `metadata.type: feedback`;
    - has a file name not already used in the memory folder or its `memory-archive/` folder.
-5. Write each draft to the `drafts` folder as `<name>.md`, with one extra frontmatter line naming its sources: `sleep_sources: a.md, b.md`. Then run `review`; it prints `Review: <path>`, a page showing each draft beside its sources. Give the user that path.
+5. Write each draft to the `drafts` folder as `<name>.md`, with one extra frontmatter line naming its sources: `sleep_sources: a.md, b.md`. Then run `review`; it prints `Review: <path>`, a page showing each draft beside its sources. Give the user that path. On the served page (`review --serve`, which the user runs) they can approve a merge or leave you a note per draft.
 6. Ask about each draft: approve, change, or skip. To change one, edit the draft and run `review` again. For each approved draft, run `merged --into <name>.md <source.md> ...`. It moves the draft into memory without the `sleep_sources` line, archives the sources, points every link at the merged memory, and commits. Delete nothing yourself; a skipped draft can stay in the drafts folder.
 7. If a hub line now links to the same merged file several times, offer to collapse those links into one, and Edit the hub only if the user agrees.
 8. Finish with: the merges made, how many memories became how many, the commit hashes, and how to undo a merge (`git -C <memDir> revert <hash>`).

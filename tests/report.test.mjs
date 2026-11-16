@@ -254,3 +254,14 @@ test("report writes markdown and json and never touches the memory folder", () =
   for (const h of ["## Summary", "## Checks", "## Usage", "## Archive candidates"]) assert.ok(md.includes(h), h);
   assert.ok(!md.includes("\u2014"), "no em dashes");
 });
+
+test("a session that runs sleep is upkeep: reading queued memories to merge them is not use", () => {
+  const fx = fixture(); standard(fx);
+  fx.session([
+    { tool: "Bash", input: { command: 'node "/plugins/sleep/sleep.mjs" queue --json' }, result: "{}" },
+    { tool: "Read", input: { file_path: path.join(fx.memDir, "zeta.md") }, result: ZETA },
+  ]);
+  const r = fx.report();
+  assert.equal(r.files.find((f) => f.name === "zeta.md").usage.sessions, 0);
+  assert.equal(r.usage.upkeepSessions, 1);
+});
