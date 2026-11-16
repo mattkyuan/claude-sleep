@@ -30,14 +30,29 @@ Pick the flow from the arguments. With none, run **report**, then offer archive 
 - Ask before every change: `archive --apply`, each merge, `restore`. Use AskUserQuestion.
 - Memory is the user's private data. Don't send it anywhere. In chat, show excerpts and proposed text, not whole folders.
 - If the command line reports an error, tell the user what it said. Don't work around it.
+- Write and Edit are for merged memories in **consolidate**, and nothing else. Don't fix failing checks, frontmatter or descriptions yourself; list them for the user, who can ask for a fix separately.
+- Say only what has happened. Never describe a change as done, under way or planned ("I'm archiving...", "after fixing...") before the user has approved it and the command line has run it. Offer changes as questions.
 - No em dashes in anything you write.
 
 ## report
 
 1. Run `report`. It prints the path of a markdown report; Read it.
-2. Tell the user, in a short table: memory files, MEMORY.md size (tokens loaded every turn), days of usage on record, files used, unused and unknown, checks that need attention, archive candidates, and the consolidation queue.
+2. Show the user this table, filled from the report, before anything else:
+
+   | | |
+   |---|---|
+   | Memory files | |
+   | MEMORY.md, loaded every turn | lines, about N tokens |
+   | Usage on record | days, sessions |
+   | Used / unused / unknown | |
+   | Checks needing attention | names |
+   | Archive candidates | |
+   | Waiting to be queued for merging | |
+   | Already in the merge queue | count of files in `consolidate/` |
+
 3. If usage history is shorter than the window, say nothing will move until it covers the window, and when that will be.
-4. For each failing check, give a one-line fix. The reasoning behind each check is in `${CLAUDE_PLUGIN_ROOT}/docs/best-practices.md`; read it only if the user asks why.
+4. For each failing check, give a one-line fix as a suggestion. The reasoning behind each check is in `${CLAUDE_PLUGIN_ROOT}/docs/best-practices.md`; read it only if the user asks why.
+5. Offer only what can run now. Merging works on files already in the merge queue (`consolidate/`); if it is empty, `archive --apply` has to run first, so offer archive, not consolidate.
 
 ## archive
 
