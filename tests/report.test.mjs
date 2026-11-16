@@ -131,6 +131,48 @@ test("one quoted error line is not use; two lines, or one line from a command th
   assert.equal(fx.report().files.find((f) => f.name === "merge.md").usage.sessions, 2, "two lines");
 });
 
+test("reading memory into a file elsewhere is use, not upkeep", () => {
+  const fx = fixture(); standard(fx);
+  fx.session([{ tool: "Bash", input: { command: `cat ${fx.memDir}/eps.md > /tmp/eps-copy.txt; cat /tmp/eps-copy.txt` }, result: EPS }]);
+  const r = fx.report();
+  assert.equal(r.usage.upkeepSessions, 0);
+  assert.equal(r.files.find((f) => f.name === "eps.md").usage.sessions, 1);
+});
+
+test("logs from a different project whose folder name starts the same are not read", () => {
+  const fx = fixture(); standard(fx);
+  const other = path.join(fx.claude, "projects", key(fx.project) + "--other");
+  fs.mkdirSync(other, { recursive: true });
+  fx.session([{ tool: "Bash", input: { command: "cat eps.md" }, result: EPS }], { dir: other });
+  assert.equal(fx.report().files.find((f) => f.name === "eps.md").usage.sessions, 0);
+  const wt = path.join(fx.claude, "projects", key(fx.project) + "--claude-worktrees-feature-x");
+  fs.mkdirSync(wt, { recursive: true });
+  fx.session([{ tool: "Bash", input: { command: "cat eps.md" }, result: EPS }], { dir: wt });
+  assert.equal(fx.report().files.find((f) => f.name === "eps.md").usage.sessions, 1);
+});
+
+test("a use with no timestamp still blocks archiving", () => {
+  const fx = fixture(); standard(fx);
+  fx.session([{ tool: "Bash", input: { command: "cat beta.md" }, result: BETA }], { ageDays: 70 });
+  fs.writeFileSync(path.join(fx.pdir, "notime.jsonl"), [
+    JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "cat eps.md" } }] } }),
+    JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "t1", content: EPS }] } }),
+  ].join("\n") + "\n");
+  assert.ok(!fx.report(["--days", "60"]).candidates.some((c) => c.name === "eps.md"));
+});
+
+test("a pipe in a description does not break the report tables", () => {
+  const fx = fixture(); standard(fx);
+  fx.write("pi|pe.md", mem("pipe", "project", "a | b", "A body line that is long enough to be recognized by the scanner."));
+  fx.session([{ tool: "Bash", input: { command: "cat beta.md" }, result: BETA }], { ageDays: 70 });
+  const out = path.join(fx.claude, "reports");
+  assert.equal(fx.run(["report", "--project", fx.project, "--state", fx.state, "--out", out, "--days", "60"]).status, 0);
+  const md = fs.readFileSync(path.join(out, fs.readdirSync(out).find((f) => f.endsWith(".md"))), "utf8");
+  const row = md.split("\n").find((l) => l.startsWith("| `pi"));
+  assert.ok(row, "pi|pe.md is listed in a table");
+  assert.equal(row.split(/(?<!\\)\|/).length, 7, row);
+});
+
 test("a listing of file names is not use", () => {
   const fx = fixture(); standard(fx);
   fx.session([{ tool: "Bash", input: { command: "ls" }, result: "alpha.md\nbeta.md\neps.md\nzeta.md" }]);
@@ -148,9 +190,13 @@ test("sessions that write memory are upkeep, not use", () => {
     { tool: "Bash", input: { command: "cat beta.md" }, result: BETA },
     { tool: "Bash", input: { command: `sed -i '' 's/x/y/' ${fx.memDir}/alpha.md` }, result: "" },
   ]);
+  fx.session([
+    { tool: "Bash", input: { command: "cat gamma.md" }, result: GAMMA },
+    { tool: "Bash", input: { command: `echo "- note" >> ${fx.memDir}/MEMORY.md` }, result: "" },
+  ]);
   const r = fx.report();
   for (const f of r.files) assert.equal(f.usage.sessions, 0, f.name);
-  assert.equal(r.usage.upkeepSessions, 2);
+  assert.equal(r.usage.upkeepSessions, 3);
 });
 
 test("a subagent's reads count for its parent session", () => {
