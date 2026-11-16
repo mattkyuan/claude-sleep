@@ -1,0 +1,8 @@
+{
+  "name": "sleep",
+  "description": "Memory upkeep for Claude Code: see which memories the agent actually uses, check the folder against best practices, archive what goes unused, and merge unused lessons into fewer, sharper ones.",
+  "version": "0.1.0",
+  "author": { "name": "Matthew Yuan" },
+  "license": "MIT",
+  "keywords": ["memory", "auto-memory", "context", "consolidation"]
+}

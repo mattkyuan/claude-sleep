@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { mem, fixture, standard, BETA, DELTA, ZETA } from "./helpers.mjs";
+import { applyMoves } from "../lib/archive.mjs";
 
 // Every file and folder under the memory folder except git's own, as relative path -> content.
 function snapshot(dir) {
@@ -125,6 +126,25 @@ test("restore refuses to overwrite a file that has come back in the meantime", (
   assert.ok(fs.existsSync(path.join(fx.memDir, "memory-archive", "beta.md")));
 });
 
+test("a move record pointing outside the memory folder is refused, never followed", () => {
+  const { fx, archive } = setup();
+  archive(["--apply"]);
+  const outside = path.join(fx.claude, "outside.md");
+  fs.writeFileSync(outside, "not memory\n");
+  const mf = path.join(fx.state, "moves.json");
+  const moves = JSON.parse(fs.readFileSync(mf, "utf8"));
+  moves.push({ kind: "archive", name: "x.md", from: "../../outside.md", to: "memory-archive/x.md", at: new Date().toISOString(), status: "active" });
+  moves.push({ kind: "archive", name: "y.md", from: "y.md", to: "../../../../escape.md", at: new Date().toISOString(), status: "active" });
+  fs.writeFileSync(mf, JSON.stringify(moves));
+  for (const name of ["x.md", "y.md"]) {
+    const r = fx.run(["restore", name, "--project", fx.project, "--state", fx.state]);
+    assert.notEqual(r.status, 0);
+  }
+  assert.equal(fs.readFileSync(outside, "utf8"), "not memory\n");
+  assert.ok(!fs.existsSync(path.join(fx.memDir, "x.md")));
+  assert.equal(fx.run(["restore", "--all", "--project", fx.project, "--state", fx.state]).status, 0, "good records still restore");
+});
+
 test("purge deletes archived files unused for the purge window and keeps ones used since", () => {
   const { fx, archive } = setup();
   archive(["--apply"]);
@@ -161,4 +181,11 @@ test("after the move, the report still sees queued files and counts their use", 
   assert.equal(z.area, "consolidate");
   assert.equal(z.usage.sessions, 1);
   assert.equal(r.candidates.length + r.consolidate.length, 0, "moved files are not proposed again");
+});
+
+test("applyMoves itself refuses a path outside the memory folder", () => {
+  const { fx } = setup();
+  assert.throws(() => applyMoves(fx.memDir, [{ from: "beta.md", to: "../escape.md" }]), /Refusing a move outside the memory folder/);
+  assert.throws(() => applyMoves(fx.memDir, [], [{ from: "beta.md", to: "/tmp/x.md" }]), /Refusing/);
+  assert.ok(fs.existsSync(path.join(fx.memDir, "beta.md")));
 });

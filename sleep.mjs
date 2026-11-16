@@ -7,8 +7,9 @@ import { readMemory } from "./lib/memory.mjs";
 import { usage, loadLedger, saveLedger } from "./lib/usage.mjs";
 import { DEFAULTS, checks, candidates } from "./lib/checks.mjs";
 import { writeReport } from "./lib/report.mjs";
-import { loadMoves, saveMoves, activeArchived, planMoves, applyMoves, setHint, pruneEmpty } from "./lib/archive.mjs";
+import { loadMoves, saveMoves, activeArchived, planMoves, applyMoves, setHint, pruneEmpty, redirectSlugs } from "./lib/archive.mjs";
 import { ensureRepo, commitAll } from "./lib/git.mjs";
+import { record, summarize } from "./lib/stats.mjs";
 
 const HELP = `sleep: memory upkeep for Claude Code
 
@@ -16,6 +17,9 @@ Usage:
   sleep report [options]          inventory, usage, checks and what could move; changes nothing
   sleep archive [options]         show what would move; with --apply, move it
   sleep restore <file> [options]  put a moved file back where it was, links and all (--all: every moved file)
+  sleep stats [options]           how well sleep is doing: size over time, restores and re-reads (its error rate), merges
+  sleep queue [options]           the consolidation queue, grouped by the hub that links to each memory
+  sleep merged --into <file> <queued>...  record a merge: archive the sources, point their links at <file>
 
 Options:
   --project DIR      the project whose memory to read (default: the current folder)
@@ -46,12 +50,27 @@ function parse(argv) {
 
 const untilde = (p) => (p && p.startsWith("~") ? os.homedir() + p.slice(1) : p);
 const projectKey = (p) => p.replace(/[^A-Za-z0-9]/g, "-");
+// Claude Code keeps a worktree's memory under its main checkout, so map a worktree back to that checkout:
+// either by Claude Code's own worktree folder, or by the .git file a git worktree has.
+function mainCheckout(dir) {
+  const cut = dir.match(/^(.*?)\/\.claude\/worktrees\//);
+  if (cut) return cut[1];
+  try {
+    const dotgit = path.join(dir, ".git");
+    if (fs.statSync(dotgit).isFile()) {
+      const m = fs.readFileSync(dotgit, "utf8").match(/^gitdir:\s*(.+?)\s*$/m);
+      const w = m && m[1].match(/^(.*)\/\.git\/worktrees\/[^/]+$/);
+      if (w) return path.resolve(dir, w[1]);
+    }
+  } catch {}
+  return dir;
+}
 const day = (t) => (t ? new Date(t).toISOString().slice(0, 10) : null);
 
 // Paths, memory, usage and candidates: everything a command needs, read once.
 async function context(flags) {
   const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude");
-  const project = path.resolve(untilde(flags.project || process.cwd()));
+  const project = mainCheckout(path.resolve(untilde(flags.project || process.cwd())));
   const key = projectKey(project);
   const pdir = path.join(claudeDir, "projects", key);
   const memDir = path.join(pdir, "memory");
@@ -112,6 +131,7 @@ function finish(r, ctx, flags, line) {
 async function report(flags) {
   const ctx = await context(flags);
   const r = buildReport(ctx, "report");
+  record(ctx, "report");
   const failed = r.checks.filter((c) => c.status === "fail" || c.status === "warn").length;
   finish(r, ctx, flags, `${r.files.length} memory files; ${ctx.u.summary.coverageDays} days of usage on record; ${failed} check(s) need attention; ${r.candidates.length} archive candidate(s); ${r.consolidate.length} queued for consolidation.`);
 }
@@ -157,6 +177,7 @@ async function archive(flags) {
     // Nothing to move, but a snapshot still records edits made since the last run.
     if (fs.existsSync(path.join(ctx.memDir, ".git"))) r.commits.before = commitAll(ctx.memDir, "sleep: snapshot before archiving");
   }
+  record(ctx, r.mode, { moved: { archive: planned.filter((m) => m.kind === "archive").length, consolidate: planned.filter((m) => m.kind === "consolidate").length }, purged: purge.length, applied: !!flags.apply });
   const verb = flags.apply ? "Moved" : "Would move";
   finish(r, ctx, flags, `${verb} ${planned.length} file(s) (${planned.filter((m) => m.kind === "archive").length} to the archive, ${planned.filter((m) => m.kind === "consolidate").length} to consolidate)${purge.length ? `; ${flags.apply ? "purged" : "would purge"} ${purge.length}` : ""}.${flags.apply ? "" : " Run with --apply to do it."}`);
 }
@@ -178,18 +199,90 @@ async function restore(flags, args) {
   setHint(ctx.memDir, ctx.moves.some((x) => x.status === "active"));
   pruneEmpty(ctx.memDir);
   saveMoves(ctx.movesFile, ctx.moves);
+  record(ctx, "restore", { restored: picked.map((m) => m.name) });
   const hash = commitAll(ctx.memDir, picked.length === 1 ? `sleep: restored ${picked[0].from}` : `sleep: restored ${picked.length} files`);
   if (flags.json) process.stdout.write(JSON.stringify({ restored: picked, commit: hash }, null, 2) + "\n");
   else console.log(picked.length === 1 ? `Restored ${picked[0].to} to ${picked[0].from}.` : `Restored ${picked.length} files.`);
 }
 
+// The consolidation queue, grouped by the file that links to each memory (a hub, usually), so related lessons can be
+// merged together. A memory nothing in the main folder links to is "unfiled".
+async function queue(flags) {
+  const ctx = await context(flags);
+  const queued = ctx.live.files.filter((f) => f.area === "consolidate");
+  const mainNames = new Set(ctx.live.files.filter((f) => f.area === "main").map((f) => f.name));
+  const topics = new Map();
+  for (const f of queued) {
+    const topic = f.linkedFrom.filter((n) => mainNames.has(n)).sort()[0] || "unfiled";
+    if (!topics.has(topic)) topics.set(topic, []);
+    topics.get(topic).push({ name: f.name, rel: f.rel, description: f.description, bytes: f.bytes, created: day(f.createdMs), lastUsed: day(ctx.use.of(f).last) });
+  }
+  const list = [...topics].map(([topic, files]) => ({ topic, files: files.sort((a, b) => a.name.localeCompare(b.name)) }))
+    .sort((a, b) => (a.topic === "unfiled") - (b.topic === "unfiled") || b.files.length - a.files.length);
+  if (flags.json) { process.stdout.write(JSON.stringify({ memDir: ctx.memDir, queued: queued.length, topics: list }, null, 2) + "\n"); return; }
+  console.log(`${queued.length} memories waiting to be merged, in ${list.length} topic(s):`);
+  for (const t of list) console.log(`  ${t.topic}: ${t.files.length}`);
+}
+
+// Records a merge the skill wrote: the merged memory is already in the folder; its queued sources move to the archive,
+// links to them now point at the merged memory, and one commit holds the whole merge.
+async function merged(flags, sources) {
+  const into = String(flags.into || "");
+  if (!into) throw new Error("Usage: sleep merged --into <merged.md> <queued.md>...");
+  if (into.includes("/") || !into.endsWith(".md")) throw new Error("The merged memory goes at the top of the memory folder, not in a subfolder, and ends in .md.");
+  if (!sources.length) throw new Error("Name the queued memories that went into it: sleep merged --into <merged.md> <queued.md>...");
+  const ctx = await context(flags);
+  if (!fs.existsSync(path.join(ctx.memDir, into))) throw new Error(`Write the merged memory first: ${into} is not in the memory folder.`);
+  const picked = sources.map((s) => {
+    const m = ctx.moves.find((x) => x.status === "active" && x.kind === "consolidate" && (x.name === s || x.to === s));
+    if (!m || !fs.existsSync(path.join(ctx.memDir, m.to))) throw new Error(`${s} is not in the consolidation queue.`);
+    return m;
+  });
+  const targets = planMoves(ctx.memDir, picked.map((m) => ({ name: m.name, rel: m.to })), []);
+  ensureRepo(ctx.memDir);
+  commitAll(ctx.memDir, "sleep: snapshot before merging", [into]);
+  // Slugs the sources answer to (file name and frontmatter name), read before they move.
+  const slugOf = (rel) => { const t = fs.readFileSync(path.join(ctx.memDir, rel), "utf8"); const n = /^name:\s*["']?([^\s"']+)/m.exec(t.slice(0, 600)); return [path.basename(rel, ".md"), n && n[1]].filter(Boolean); };
+  const mergedSlug = slugOf(into).at(-1);
+  const slugMap = new Map(picked.flatMap((m) => slugOf(m.to).map((sl) => [sl, mergedSlug])));
+  applyMoves(ctx.memDir, targets, picked.map((m) => ({ from: m.to, to: into })));
+  redirectSlugs(ctx.memDir, slugMap);
+  const at = new Date().toISOString();
+  for (const [i, m] of picked.entries()) {
+    m.status = "merged"; m.mergedAt = at;
+    ctx.moves.push({ kind: "merged", name: m.name, from: m.to, to: targets[i].to, into, at, status: "active" });
+  }
+  setHint(ctx.memDir, true);
+  pruneEmpty(ctx.memDir);
+  saveMoves(ctx.movesFile, ctx.moves);
+  record(ctx, "merged", { merged: { into, sources: picked.map((m) => m.name) } });
+  const hash = commitAll(ctx.memDir, `sleep: merged ${picked.length} into ${into}`);
+  if (flags.json) process.stdout.write(JSON.stringify({ into, sources: targets, commit: hash }, null, 2) + "\n");
+  else console.log(`Merged ${picked.length} into ${into}; the sources are in the archive. Undo with: git -C "${ctx.memDir}" revert ${hash}`);
+}
+
+async function stats(flags) {
+  const ctx = await context(flags);
+  record(ctx, "stats");
+  const s = summarize(ctx);
+  if (flags.json) { process.stdout.write(JSON.stringify(s, null, 2) + "\n"); return; }
+  const pct = (x) => (x == null ? "n/a" : `${Math.round(x * 100)}%`);
+  console.log(`${s.runs} run(s) on record.`);
+  if (s.first && s.last) console.log(`Memory: ${s.first.files.main + s.first.files.consolidate} live files, MEMORY.md ~${s.first.indexTokens} tokens (${s.first.at}) -> ${s.last.files.main + s.last.files.consolidate} live files, ~${s.last.indexTokens} tokens (${s.last.at}).`);
+  console.log(`Archived ${s.archived}; restored ${s.restored}; read again from the archive ${s.readAgain.length}; mistake rate ${pct(s.mistakeRate)}.`);
+  console.log(`Queued ${s.queued} for consolidation; merged ${s.merged.sources} into ${s.merged.outputs}; purged ${s.purged}.`);
+}
+
 async function main() {
   const { cmd, args, flags } = parse(process.argv.slice(2));
   if (!cmd || cmd === "help" || flags.help) { process.stdout.write(HELP); return; }
-  if (cmd !== "restore" && args.length) throw new Error(`Unexpected argument: ${args[0]}`);
+  if (!["restore", "merged"].includes(cmd) && args.length) throw new Error(`Unexpected argument: ${args[0]}`);
   if (cmd === "report") return report(flags);
   if (cmd === "archive") return archive(flags);
   if (cmd === "restore") return restore(flags, args);
+  if (cmd === "queue") return queue(flags);
+  if (cmd === "stats") return stats(flags);
+  if (cmd === "merged") return merged(flags, args);
   throw new Error(`Unknown command: ${cmd}. Try: sleep help`);
 }
 

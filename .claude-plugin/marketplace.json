@@ -1,0 +1,13 @@
+{
+  "name": "claude-sleep",
+  "owner": { "name": "Matthew Yuan" },
+  "plugins": [
+    {
+      "name": "sleep",
+      "source": "./",
+      "description": "Memory upkeep for Claude Code: see which memories are used, archive what is not, merge unused lessons.",
+      "version": "0.1.0",
+      "category": "productivity"
+    }
+  ]
+}

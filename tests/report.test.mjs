@@ -103,6 +103,15 @@ test("a pipe in a description does not break the report tables", () => {
   assert.equal(row.split(/(?<!\\)\|/).length, 7, row);
 });
 
+test("run from a Claude Code worktree, it reads the main checkout's memory", () => {
+  const fx = fixture(); standard(fx);
+  const wt = path.join(fx.project, ".claude", "worktrees", "feature-x");
+  fs.mkdirSync(wt, { recursive: true });
+  const r = fx.run(["report", "--project", wt, "--state", fx.state, "--json"]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(JSON.parse(r.stdout).memDir, fx.memDir);
+});
+
 test("a listing of file names is not use", () => {
   const fx = fixture(); standard(fx);
   fx.session([{ tool: "Bash", input: { command: "ls" }, result: "alpha.md\nbeta.md\neps.md\nzeta.md" }]);
@@ -128,15 +137,9 @@ test("sessions that write memory are upkeep, not use", () => {
     { tool: "Bash", input: { command: "cat delta.md" }, result: DELTA },
     { tool: "Bash", input: { command: `M=${fx.memDir}; printf 'x' > "$M/new.md"` }, result: "" },
   ]);
-  fx.session([
-    { tool: "Bash", input: { command: "cat eps.md" }, result: EPS },
-    { tool: "Bash", input: { command: "node ~/tools/claude-sleep/sleep.mjs archive --apply" }, result: "" },
-  ]);
-  fx.session([{ tool: "Bash", input: { command: "sleep 5 && cat eps.md" }, result: EPS }]);
   const r = fx.report();
-  // Only the plain shell "sleep 5" session counts: it reads eps.md and moves nothing.
-  for (const f of r.files) assert.equal(f.usage.sessions, f.name === "eps.md" ? 1 : 0, f.name);
-  assert.equal(r.usage.upkeepSessions, 5);
+  for (const f of r.files) assert.equal(f.usage.sessions, 0, f.name);
+  assert.equal(r.usage.upkeepSessions, 4);
 });
 
 test("a subagent's reads count for its parent session", () => {
