@@ -7,9 +7,17 @@ import { readMemory } from "./lib/memory.mjs";
 import { usage, loadLedger, saveLedger } from "./lib/usage.mjs";
 import { DEFAULTS, checks, candidates } from "./lib/checks.mjs";
 import { writeReport } from "./lib/report.mjs";
-import { loadMoves, saveMoves, activeArchived, planMoves, applyMoves, setHint, pruneEmpty, redirectSlugs } from "./lib/archive.mjs";
+import { loadMoves, saveMoves, activeArchived, planMoves, applyMoves, setHint, pruneEmpty, redirectSlugs, linkEdits, hasHint, HINT } from "./lib/archive.mjs";
 import { ensureRepo, commitAll } from "./lib/git.mjs";
 import { record, summarize } from "./lib/stats.mjs";
+import { parseSchedule, describe, command, plist, cronLine, install, remove, labelFor } from "./lib/schedule.mjs";
+import { fileURLToPath } from "node:url";
+import { frontmatter } from "./lib/memory.mjs";
+import { reviewHtml } from "./lib/review.mjs";
+
+const CLI = fileURLToPath(import.meta.url);
+const loadConfig = (state) => { try { const c = JSON.parse(fs.readFileSync(path.join(state, "config.json"), "utf8")); return c && typeof c === "object" ? c : {}; } catch { return {}; } };
+const saveConfig = (state, c) => { fs.mkdirSync(state, { recursive: true }); fs.writeFileSync(path.join(state, "config.json"), JSON.stringify(c, null, 2) + "\n"); };
 
 const HELP = `sleep: memory upkeep for Claude Code
 
@@ -17,6 +25,9 @@ Usage:
   sleep report [options]          inventory, usage, checks and what could move; changes nothing
   sleep archive [options]         show what would move; with --apply, move it
   sleep restore <file> [options]  put a moved file back where it was, links and all (--all: every moved file)
+  sleep schedule [--every daily|weekly|monthly] [--day D] [--at HH:MM] [--mode report|archive] [--off]
+                                  run sleep on its own (report only unless --mode archive); no flags shows it
+  sleep review [--open]           a local page with every proposed move, link edit and merge draft; changes nothing
   sleep stats [options]           how well sleep is doing: size over time, restores and re-reads (its error rate), merges
   sleep queue [options]           the consolidation queue, grouped by the hub that links to each memory
   sleep merged --into <file> <queued>...  record a merge: archive the sources, point their links at <file>
@@ -42,7 +53,7 @@ function parse(argv) {
     const a = argv[i];
     if (!a.startsWith("--")) { o.args.push(a); continue; }
     const k = a.slice(2);
-    if (["json", "help", "apply", "all"].includes(k)) o.flags[k] = true;
+    if (["json", "help", "apply", "all", "off", "open"].includes(k)) o.flags[k] = true;
     else { if (i + 1 >= argv.length) throw new Error(`${a} needs a value`); o.flags[k] = argv[++i]; }
   }
   return o;
@@ -68,18 +79,25 @@ function mainCheckout(dir) {
 const day = (t) => (t ? new Date(t).toISOString().slice(0, 10) : null);
 
 // Paths, memory, usage and candidates: everything a command needs, read once.
-async function context(flags) {
+// Where everything is, without reading anything yet.
+function locate(flags) {
   const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude");
   const project = mainCheckout(path.resolve(untilde(flags.project || process.cwd())));
   const key = projectKey(project);
   const pdir = path.join(claudeDir, "projects", key);
   const memDir = path.join(pdir, "memory");
   if (!fs.existsSync(memDir)) throw new Error(`No memory folder at ${memDir}`);
-  const days = flags.days ? Number(flags.days) : DEFAULTS.days;
-  if (!Number.isInteger(days) || days < 1) throw new Error("--days must be a whole number of days");
-  const opt = { ...DEFAULTS, days };
   // Sleep's own files live next to the memory folder, never in it, so a grep of memory never hits them.
   const state = path.resolve(untilde(flags.state || path.join(pdir, "sleep")));
+  return { claudeDir, project, key, pdir, memDir, state, config: loadConfig(state) };
+}
+
+async function context(flags) {
+  const { claudeDir, project, key, pdir, memDir, state, config } = locate(flags);
+  // A flag wins over config.json, which wins over the default.
+  const days = flags.days != null ? Number(flags.days) : config.days ?? DEFAULTS.days;
+  if (!Number.isInteger(days) || days < 1) throw new Error("--days must be a whole number of days");
+  const opt = { ...DEFAULTS, days };
   const movesFile = path.join(state, "moves.json");
   const moves = loadMoves(movesFile);
 
@@ -178,7 +196,9 @@ async function archive(flags) {
     if (fs.existsSync(path.join(ctx.memDir, ".git"))) r.commits.before = commitAll(ctx.memDir, "sleep: snapshot before archiving");
   }
   record(ctx, r.mode, { moved: { archive: planned.filter((m) => m.kind === "archive").length, consolidate: planned.filter((m) => m.kind === "consolidate").length }, purged: purge.length, applied: !!flags.apply });
+  const reviewFile = flags.apply ? null : writeReview(ctx, planned, purge);
   const verb = flags.apply ? "Moved" : "Would move";
+  if (reviewFile && !flags.json) console.log(`Review: ${reviewFile}`);
   finish(r, ctx, flags, `${verb} ${planned.length} file(s) (${planned.filter((m) => m.kind === "archive").length} to the archive, ${planned.filter((m) => m.kind === "consolidate").length} to consolidate)${purge.length ? `; ${flags.apply ? "purged" : "would purge"} ${purge.length}` : ""}.${flags.apply ? "" : " Run with --apply to do it."}`);
 }
 
@@ -219,7 +239,7 @@ async function queue(flags) {
   }
   const list = [...topics].map(([topic, files]) => ({ topic, files: files.sort((a, b) => a.name.localeCompare(b.name)) }))
     .sort((a, b) => (a.topic === "unfiled") - (b.topic === "unfiled") || b.files.length - a.files.length);
-  if (flags.json) { process.stdout.write(JSON.stringify({ memDir: ctx.memDir, queued: queued.length, topics: list }, null, 2) + "\n"); return; }
+  if (flags.json) { process.stdout.write(JSON.stringify({ memDir: ctx.memDir, drafts: path.join(ctx.state, "drafts"), queued: queued.length, topics: list }, null, 2) + "\n"); return; }
   console.log(`${queued.length} memories waiting to be merged, in ${list.length} topic(s):`);
   for (const t of list) console.log(`  ${t.topic}: ${t.files.length}`);
 }
@@ -232,7 +252,8 @@ async function merged(flags, sources) {
   if (into.includes("/") || !into.endsWith(".md")) throw new Error("The merged memory goes at the top of the memory folder, not in a subfolder, and ends in .md.");
   if (!sources.length) throw new Error("Name the queued memories that went into it: sleep merged --into <merged.md> <queued.md>...");
   const ctx = await context(flags);
-  if (!fs.existsSync(path.join(ctx.memDir, into))) throw new Error(`Write the merged memory first: ${into} is not in the memory folder.`);
+  const draft = path.join(ctx.state, "drafts", into);
+  if (!fs.existsSync(path.join(ctx.memDir, into)) && !fs.existsSync(draft)) throw new Error(`Write the merged memory first: ${into} is not in the memory folder or in ${path.dirname(draft)}.`);
   const picked = sources.map((s) => {
     const m = ctx.moves.find((x) => x.status === "active" && x.kind === "consolidate" && (x.name === s || x.to === s));
     if (!m || !fs.existsSync(path.join(ctx.memDir, m.to))) throw new Error(`${s} is not in the consolidation queue.`);
@@ -241,6 +262,8 @@ async function merged(flags, sources) {
   const targets = planMoves(ctx.memDir, picked.map((m) => ({ name: m.name, rel: m.to })), []);
   ensureRepo(ctx.memDir);
   commitAll(ctx.memDir, "sleep: snapshot before merging", [into]);
+  // An approved draft moves into memory without the line that named its sources.
+  if (!fs.existsSync(path.join(ctx.memDir, into))) { fs.writeFileSync(path.join(ctx.memDir, into), fs.readFileSync(draft, "utf8").replace(SOURCES_LINE, "")); fs.unlinkSync(draft); }
   // Slugs the sources answer to (file name and frontmatter name), read before they move.
   const slugOf = (rel) => { const t = fs.readFileSync(path.join(ctx.memDir, rel), "utf8"); const n = /^name:\s*["']?([^\s"']+)/m.exec(t.slice(0, 600)); return [path.basename(rel, ".md"), n && n[1]].filter(Boolean); };
   const mergedSlug = slugOf(into).at(-1);
@@ -273,6 +296,88 @@ async function stats(flags) {
   console.log(`Queued ${s.queued} for consolidation; merged ${s.merged.sources} into ${s.merged.outputs}; purged ${s.purged}.`);
 }
 
+// Shows, sets or removes the schedule. Settings live in config.json next to sleep's other records.
+async function schedule(flags) {
+  const loc = locate(flags);
+  const cfg = loc.config;
+  const label = labelFor(loc.key);
+  const platform = process.env.SLEEP_PLATFORM || process.platform;
+  if (flags.off) {
+    if (platform === "darwin") remove(label);
+    saveConfig(loc.state, { ...cfg, schedule: null });
+    console.log(platform === "darwin" ? "Schedule removed." : "Schedule cleared. Remove the crontab line by hand (crontab -e).");
+    return;
+  }
+  if (!flags.every) {
+    console.log(cfg.schedule ? `Runs ${describe(cfg.schedule)}. Change it with --every, or remove it with --off.` : "No schedule. Set one with: sleep schedule --every weekly");
+    return;
+  }
+  const s = parseSchedule(flags);
+  const args = command(s, { cli: CLI, project: loc.project, state: loc.state });
+  const log = path.join(loc.state, "schedule.log");
+  fs.mkdirSync(loc.state, { recursive: true });
+  if (platform === "darwin") {
+    const file = install(label, plist(label, args, s, log));
+    saveConfig(loc.state, { ...cfg, schedule: s });
+    console.log(`Scheduled: ${describe(s)}. Job: ${file}. Log: ${log}`);
+  } else {
+    saveConfig(loc.state, { ...cfg, schedule: s });
+    console.log(`Add this line with crontab -e to run ${describe(s)}:`);
+    console.log(cronLine(s, args, log));
+  }
+}
+
+// Merge drafts the skill wrote to <state>/drafts, each naming its sources in a sleep_sources: line.
+const SOURCES_LINE = /^sleep_sources:.*\n/m;
+function readDrafts(ctx) {
+  const dir = path.join(ctx.state, "drafts");
+  let names = []; try { names = fs.readdirSync(dir).filter((n) => n.endsWith(".md")).sort(); } catch {}
+  return names.map((name) => {
+    const text = fs.readFileSync(path.join(dir, name), "utf8");
+    const { fm } = frontmatter(text);
+    const list = String(fm.sleep_sources || "").split(",").map((x) => x.trim()).filter(Boolean);
+    const sources = list.map((sn) => {
+      const f = ctx.live.files.find((x) => x.name === sn || x.rel === sn);
+      return { name: sn, queued: f?.area === "consolidate", description: f?.description, body: f?.body, bytes: f?.bytes || 0 };
+    });
+    return { name, description: typeof fm.description === "string" ? fm.description : "", body: text.replace(SOURCES_LINE, ""), sources, beforeBytes: sources.reduce((a, x) => a + x.bytes, 0), afterBytes: Buffer.byteLength(text.replace(SOURCES_LINE, "")) };
+  });
+}
+
+// The review page for what archive would do now, plus any merge drafts. Writes nothing in memory.
+function writeReview(ctx, planned, purge) {
+  const body = (rel) => ctx.mem.files.find((f) => f.rel === rel)?.body;
+  const info = new Map([...ctx.cand.list, ...ctx.cand.consolidate].map((c) => [c.name, c]));
+  const r = {
+    generatedAt: new Date().toISOString(), memDir: ctx.memDir, days: ctx.opt.days, usage: ctx.u.summary, candidatesNote: ctx.cand.note,
+    moves: planned.map((m) => ({ ...info.get(m.name), ...m, body: body(m.from) })),
+    purged: purge.map((m) => m.to),
+    edits: planned.length ? linkEdits(ctx.memDir, planned) : [],
+    hint: { add: planned.length > 0 && !hasHint(ctx.memDir), present: hasHint(ctx.memDir), line: HINT },
+    drafts: readDrafts(ctx),
+    queued: ctx.live.files.filter((f) => f.area === "consolidate").length,
+  };
+  const out = path.join(ctx.state, "reports");
+  fs.mkdirSync(out, { recursive: true });
+  const file = path.join(out, `${r.generatedAt.replace(/[:.]/g, "-").replace("T", "-").slice(0, 19)}-review.html`);
+  fs.writeFileSync(file, reviewHtml(r));
+  return file;
+}
+
+async function review(flags) {
+  const ctx = await context(flags);
+  const planned = planMoves(ctx.memDir, ctx.cand.list, ctx.cand.consolidate);
+  const file = writeReview(ctx, planned, purgeList(ctx, purgeDays(flags, ctx.state)));
+  record(ctx, "review");
+  console.log(`Review: ${file}`);
+  if (flags.open) spawnOpen(file);
+}
+
+function spawnOpen(file) {
+  const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "explorer" : "xdg-open";
+  import("node:child_process").then(({ spawn }) => spawn(cmd, [file], { stdio: "ignore", detached: true }).unref());
+}
+
 async function main() {
   const { cmd, args, flags } = parse(process.argv.slice(2));
   if (!cmd || cmd === "help" || flags.help) { process.stdout.write(HELP); return; }
@@ -282,6 +387,8 @@ async function main() {
   if (cmd === "restore") return restore(flags, args);
   if (cmd === "queue") return queue(flags);
   if (cmd === "stats") return stats(flags);
+  if (cmd === "review") return review(flags);
+  if (cmd === "schedule") return schedule(flags);
   if (cmd === "merged") return merged(flags, args);
   throw new Error(`Unknown command: ${cmd}. Try: sleep help`);
 }

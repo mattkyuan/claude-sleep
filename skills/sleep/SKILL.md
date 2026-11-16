@@ -1,7 +1,7 @@
 ---
 name: sleep
 description: Memory upkeep for Claude Code's auto memory. Shows which memory files the agent actually uses, checks the folder against best practices, archives memories that go unused, and merges unused feedback memories into fewer, sharper ones. Use when the user asks to tidy, clean up, audit, consolidate or "sleep" their memory, or asks which memories are used.
-argument-hint: "[report | archive | consolidate [topic] | restore <file> | stats]"
+argument-hint: "[report | archive | consolidate [topic] | restore <file> | schedule | stats]"
 allowed-tools:
   - Bash(node "${CLAUDE_PLUGIN_ROOT}/sleep.mjs" *)
   - Read
@@ -30,7 +30,7 @@ Pick the flow from the arguments. With none, run **report**, then offer archive 
 - Ask before every change: `archive --apply`, each merge, `restore`. Use AskUserQuestion.
 - Memory is the user's private data. Don't send it anywhere. In chat, show excerpts and proposed text, not whole folders.
 - If the command line reports an error, tell the user what it said. Don't work around it.
-- Write and Edit are for merged memories in **consolidate**, and nothing else. Don't fix failing checks, frontmatter or descriptions yourself; list them for the user, who can ask for a fix separately.
+- Write is for merge drafts in the drafts folder (**consolidate**), and nothing else. Never write or edit inside the memory folder, except collapsing hub links in **consolidate** step 7 after the user agrees; the command line moves an approved draft in. Don't fix failing checks, frontmatter or descriptions yourself; list them for the user, who can ask for a fix separately.
 - Say only what has happened. Never describe a change as done, under way or planned ("I'm archiving...", "after fixing...") before the user has approved it and the command line has run it. Offer changes as questions.
 - No em dashes in anything you write.
 
@@ -56,7 +56,7 @@ Pick the flow from the arguments. With none, run **report**, then offer archive 
 
 ## archive
 
-1. Run `archive` (a dry run). Summarize the moves: how many go to the archive, how many to the consolidation queue, and a few example names.
+1. Run `archive` (a dry run). It prints `Review: <path>`, a local page with every move, its evidence and every link edit. Give the user that path, and summarize: how many go to the archive, how many to the merge queue, a few example names.
 2. Ask before running `archive --apply`.
 3. After it runs, give the commit hashes from the report, and how to undo: `restore <file>`, or `restore --all` for the whole run.
 
@@ -64,7 +64,7 @@ Pick the flow from the arguments. With none, run **report**, then offer archive 
 
 Merging is the one place where you write memory. Work on one topic per run unless the user asks for more.
 
-1. Run `queue --json`. It returns `memDir` and the queued memories grouped by the file that links to them (usually a hub). Show the topics with their counts, and ask which one to merge, largest first. With more than about 12 files in a topic, take them in batches of about 10.
+1. Run `queue --json`. It returns `memDir`, the `drafts` folder, and the queued memories grouped by the file that links to them (usually a hub). Show the topics with their counts, and ask which one to merge, largest first. With more than about 12 files in a topic, take them in batches of about 10.
 2. Read every memory in the batch (`<memDir>/<rel>`) and the hub that links to them.
 3. Group the memories that state the same rule or lesson. Draft one merged memory per group, not one per topic. A memory that fits no group stays queued; don't force it.
 4. Write each merged memory so that it:
@@ -72,14 +72,21 @@ Merging is the one place where you write memory. Work on one topic per run unles
    - keeps the **Why:** and **How to apply:** lines; where sources disagree, follows the newest and notes the older view in one line;
    - starts with frontmatter like the sources: `name` (matching the file name), a `description` of 150 characters or fewer using the words someone would search for, and `metadata.type: feedback`;
    - has a file name not already used in the memory folder or its `memory-archive/` folder.
-5. For each proposed merge, show the user the full new text and the list of sources, and ask: approve, change, or skip.
-6. For each approved merge, Write the new file at the top of the memory folder (`<memDir>/<name>.md`). Then run `merged --into <name>.md <source.md> ...`. This archives the sources, points every link at the new file, and commits. Never edit or remove the sources yourself.
+5. Write each draft to the `drafts` folder as `<name>.md`, with one extra frontmatter line naming its sources: `sleep_sources: a.md, b.md`. Then run `review`; it prints `Review: <path>`, a page showing each draft beside its sources. Give the user that path.
+6. Ask about each draft: approve, change, or skip. To change one, edit the draft and run `review` again. For each approved draft, run `merged --into <name>.md <source.md> ...`. It moves the draft into memory without the `sleep_sources` line, archives the sources, points every link at the merged memory, and commits. Delete nothing yourself; a skipped draft can stay in the drafts folder.
 7. If a hub line now links to the same merged file several times, offer to collapse those links into one, and Edit the hub only if the user agrees.
 8. Finish with: the merges made, how many memories became how many, the commit hashes, and how to undo a merge (`git -C <memDir> revert <hash>`).
 
 ## restore
 
 Confirm with the user, then run `restore <file>`, or `restore --all` to undo every move still in place.
+
+## schedule
+
+1. Run `schedule` to see what is set.
+2. Ask how often (daily, weekly or monthly), and when. Suggest weekly, Monday 09:00, report only.
+3. Report only is the default and changes nothing. Offer `--mode archive` (moves files with `archive --apply` on each run) only if the user asks for it, and say what it does before running it. Merging never runs on a schedule.
+4. Run `schedule --every <daily|weekly|monthly> [--day D] [--at HH:MM] [--mode report|archive]`, and tell the user where the job and its log are. To stop it: `schedule --off`.
 
 ## stats
 

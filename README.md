@@ -2,7 +2,7 @@
 
 Memory upkeep for Claude Code. It shows which memory files the agent actually uses, checks the folder against [best practices](docs/best-practices.md), and moves what goes unused out of the way: project memories to an archive, feedback memories to a queue where they can be merged. Every run writes a report, and every change is a git commit you can undo.
 
-Early: the command line and the `/sleep` skill work. Scheduling is next.
+Early: the command line, the `/sleep` skill and scheduling work.
 
 ## Install
 
@@ -22,6 +22,7 @@ Then run `/sleep` in any project. Requires Node 18 or later and git.
 | `/sleep archive` | Shows the moves, then moves them once you agree |
 | `/sleep consolidate` | Merges queued lessons one topic at a time; you approve each merged memory |
 | `/sleep restore <file>` | Puts a moved file back |
+| `/sleep schedule` | Runs sleep on its own, weekly by default and report only |
 | `/sleep stats` | How well sleep is doing over time |
 
 ## Run the command line directly
@@ -45,6 +46,7 @@ node sleep.mjs archive --apply --project ~/code/my-project
 | `restore <file>` | Puts a moved file back where it was, links and all. `--all` undoes every move. |
 | `queue` | The consolidation queue, grouped by the hub that links to each memory |
 | `merged --into <file> <queued>...` | Records a merge the skill wrote: archives the sources and points their links at the merged file |
+| `review [--open]` | A local page with every proposed move, its evidence, each link edit as before and after, and merge drafts beside their sources. Changes nothing. An `archive` dry run writes one too. |
 | `stats` | Memory size over time, and sleep's error rate: files restored after archiving, or read again from the archive |
 
 | Flag | What it does |
@@ -67,6 +69,17 @@ node sleep.mjs archive --apply --project ~/code/my-project
 - Links to a moved file are rewritten, not deleted, so a line that lists several memories keeps its context.
 - One line in MEMORY.md tells the agent to look in the archive and the queue only after the main files turn up nothing.
 - Before changing anything, sleep commits the memory folder to its own git history, then commits again after.
+
+## Schedule it
+
+```bash
+node sleep.mjs schedule --every weekly --day mon --at 09:00
+```
+
+- `--every` is `daily`, `weekly` or `monthly`; `--day` is a weekday, or a day of the month from 1 to 28.
+- `--mode report` (the default) changes nothing. `--mode archive` runs `archive --apply` each time. Merging never runs on a schedule.
+- On macOS this installs a launchd job; elsewhere it prints a crontab line to add. `schedule` alone shows what is set, and `schedule --off` removes it.
+- Settings live in `sleep/config.json` next to the memory folder. `days` (the window) and `purgeAfterDays` there apply to every run; a flag on the command line wins.
 
 ## What counts as use
 
