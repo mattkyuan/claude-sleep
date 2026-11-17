@@ -7,7 +7,7 @@ These are the rules for sleep's review page, and for any UI sleep adds later.
 3. **Every decision has its evidence beside it:** why the file was picked, when it was created, when it was last used, and in how many sessions.
 4. **Decide in bulk, inspect in detail.** Groups have Move all and Keep all buttons, and any row opens to show the file or the change.
 5. **Show changes as before and after.** Link edits are shown as removed and added lines, and each draft sits beside its sources.
-6. **Private and local.** The page runs on 127.0.0.1 only and loads nothing from outside. The address carries a private key, and the server checks every request against its own plan, whatever the page sends. Memory text is always escaped.
+6. **Private and local.** The page runs on 127.0.0.1 only and loads nothing from outside. The address carries a private key, and the server checks every request against its own plan, whatever the page sends. The project picker offers only projects the server found on disk, and every action names its project, so a tab left open on one project never acts on another. Memory text is always escaped.
 7. **Sister to harness-map:** same palette, same type, same serve model, dark first.
 8. **Plain words.** Say what will happen, never that it "is being done". No em dashes.
 

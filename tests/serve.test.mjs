@@ -143,3 +143,72 @@ test("merge refuses a draft named like a memory that already exists", async (t) 
   assert.match(JSON.parse(r.body).error, /already exists/);
   assert.ok(exists("consolidate/zeta.md"), "source still queued");
 });
+
+// A second project next to the fixture's, with one old project memory, usage on record, and a log that names its folder.
+const OMEGA = "Omega records the retired billing export that ran each quarter.";
+function second(fx) {
+  const dir = path.join(fx.claude, "work", "other");
+  fs.mkdirSync(dir, { recursive: true });
+  const k = dir.replace(/[^A-Za-z0-9]/g, "-");
+  const pdir = path.join(fx.claude, "projects", k);
+  const memDir = path.join(pdir, "memory");
+  fs.mkdirSync(memDir, { recursive: true });
+  const put = (name, text) => { const f = path.join(memDir, name); fs.writeFileSync(f, text); const t = new Date(Date.now() - 90 * 864e5); fs.utimesSync(f, t, t); };
+  put("MEMORY.md", "# Memory\n");
+  put("omega.md", mem("omega", "project", "Old billing export", OMEGA));
+  fx.session([{ tool: "Bash", input: { command: "ls" }, result: "x" }], { ageDays: 70, dir: pdir, cwd: dir });
+  // The newest log ran in a subfolder, whose key differs, so it must not be taken as the project's folder.
+  fx.session([{ tool: "Bash", input: { command: "ls" }, result: "x" }], { ageDays: 1, dir: pdir, cwd: path.join(dir, "sub") });
+  // Left out of the list: a worktree's folder (it shares the main checkout's memory) and an empty memory folder.
+  for (const [name, file] of [[`${k}--claude-worktrees-wt`, "w.md"], ["-empty-proj", null]]) {
+    fs.mkdirSync(path.join(fx.claude, "projects", name, "memory"), { recursive: true });
+    if (file) fs.writeFileSync(path.join(fx.claude, "projects", name, "memory", file), "x");
+  }
+  return { dir, key: k, pdir, memDir };
+}
+
+test("projects lists each project with memory once, by key, with its folder when a log names it", () => {
+  const { fx, ok } = setup();
+  const b = second(fx);
+  const list = JSON.parse(ok(["projects", "--json"]).stdout);
+  assert.deepEqual(list.map((p) => p.key).sort(), [fx.project.replace(/[^A-Za-z0-9]/g, "-"), b.key].sort());
+  assert.equal(list.find((p) => p.key === b.key).path, b.dir);
+  assert.equal(list.find((p) => p.key === b.key).files, 2);
+});
+
+test("the served page picks a project by key, renders it, and its actions act on that project and its own state", async (t) => {
+  const { fx, flags, exists } = setup();
+  const b = second(fx);
+  const { req, token, act } = await serve(t, flags, fx);
+  const enter = await req("GET", `/?token=${token}`);
+  const cookie = enter.headers["set-cookie"][0].split(";")[0];
+  const home = await req("GET", "/", { headers: { Cookie: cookie } });
+  assert.match(home.body, new RegExp(`<option value="${b.key}"`), "the picker offers the other project");
+  assert.doesNotMatch(home.body, /claude-worktrees-wt|-empty-proj/);
+  const other = await req("GET", `/?project=${encodeURIComponent(b.key)}`, { headers: { Cookie: cookie } });
+  assert.equal(other.status, 200);
+  assert.match(other.body, /data-pick value="omega\.md"/);
+  assert.doesNotMatch(other.body, /data-pick value="beta\.md"/);
+  assert.ok(other.body.includes(`P = ${JSON.stringify(b.key)}`), "the page sends its project with every action");
+
+  // Apply with the other project's key moves its file, records it in its own state, and leaves the first alone.
+  const r = await act("/apply", { project: b.key, moves: ["omega.md", "beta.md"] });
+  assert.equal(r.status, 200, r.body);
+  assert.ok(fs.existsSync(path.join(b.memDir, "memory-archive", "omega.md")), "omega moved");
+  assert.ok(exists("beta.md"), "the first project is untouched");
+  assert.ok(fs.existsSync(path.join(b.pdir, "sleep", "moves.json")), "the other project keeps its own state");
+  const firstMoves = path.join(fx.state, "moves.json");
+  assert.ok(!fs.existsSync(firstMoves) || !fs.readFileSync(firstMoves, "utf8").includes("omega"), "not in the first project's state");
+});
+
+test("the served page refuses project keys it did not find itself", async (t) => {
+  const { fx, flags, exists } = setup();
+  const b = second(fx);
+  const { req, token, act } = await serve(t, flags, fx);
+  const cookie = (await req("GET", `/?token=${token}`)).headers["set-cookie"][0].split(";")[0];
+  for (const bad of ["nope", "..", "../..", `${b.key}--claude-worktrees-wt`, "-empty-proj", b.memDir]) {
+    assert.equal((await req("GET", `/?project=${encodeURIComponent(bad)}`, { headers: { Cookie: cookie } })).status, 400, bad);
+    assert.equal((await act("/apply", { project: bad, moves: ["omega.md", "beta.md"] })).status, 400, bad);
+  }
+  assert.ok(exists("beta.md") && fs.existsSync(path.join(b.memDir, "omega.md")), "nothing moved");
+});

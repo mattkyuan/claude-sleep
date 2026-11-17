@@ -30,13 +30,16 @@ Usage:
   sleep schedule [--every daily|weekly|monthly] [--day D] [--at HH:MM] [--mode report|archive] [--off]
                                   run sleep on its own (report only unless --mode archive); no flags shows it
   sleep review [--open]           a local page with every proposed move, link edit and merge draft; changes nothing
-  sleep review --serve [--port N] the same page on 127.0.0.1, where you pick moves, approve merges and leave notes
+  sleep review --serve [--port N] the same page on 127.0.0.1, where you pick moves, approve merges and leave notes,
+                                  for any project with memory (pick it at the top of the page)
+  sleep projects [--json]         every project with memory, and how many files each has
   sleep stats [options]           how well sleep is doing: size over time, restores and re-reads (its error rate), merges
   sleep queue [options]           the consolidation queue, grouped by the hub that links to each memory
   sleep merged --into <file> <queued>...  record a merge: archive the sources, point their links at <file>
 
 Options:
   --project DIR      the project whose memory to read (default: the current folder)
+  --key KEY          the same, by the folder name under ~/.claude/projects (as sleep projects shows it)
   --days N           a file must go unused this many days before it moves (default ${DEFAULTS.days})
   --apply            archive: actually move files (and purge, if a purge window is set)
   --port N           review --serve: the port (default 8767; a free one if taken)
@@ -85,20 +88,68 @@ const day = (t) => (t ? new Date(t).toISOString().slice(0, 10) : null);
 
 // Paths, memory, usage and candidates: everything a command needs, read once.
 // Where everything is, without reading anything yet.
+const claudeDirOf = () => process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude");
+
+// The project folder a key stands for, read from the newest session log that names one. Keys are lossy (a dash may
+// have been a slash), so a folder counts only if it encodes back to the same key; otherwise the answer is null.
+function folderOf(pdir, key) {
+  let logs = [];
+  try { logs = fs.readdirSync(pdir).filter((f) => f.endsWith(".jsonl")).map((f) => path.join(pdir, f)).sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs); } catch {}
+  for (const log of logs.slice(0, 5)) {
+    let head = "";
+    try { const fd = fs.openSync(log, "r"); const buf = Buffer.alloc(65536); head = buf.toString("utf8", 0, fs.readSync(fd, buf, 0, buf.length, 0)); fs.closeSync(fd); } catch { continue; }
+    for (const line of head.split("\n")) {
+      let cwd; try { cwd = JSON.parse(line).cwd; } catch { continue; }
+      if (typeof cwd !== "string" || !cwd) continue;
+      const main = mainCheckout(cwd);
+      if (projectKey(main) === key) return main;
+    }
+  }
+  return null;
+}
+
+// Every project with memory to look at, by the key Claude Code files it under. A worktree's folder is left out (it
+// shares its main checkout's memory), and so is a memory folder with no files. Reads folder listings only.
+function listProjects(claudeDir = claudeDirOf()) {
+  const root = path.join(claudeDir, "projects");
+  let ents = [];
+  try { ents = fs.readdirSync(root, { withFileTypes: true }); } catch {}
+  const out = [];
+  for (const e of ents) {
+    if (!e.isDirectory() || e.name.includes("--claude-worktrees-")) continue;
+    const pdir = path.join(root, e.name), memDir = path.join(pdir, "memory");
+    let files;
+    try { files = fs.readdirSync(memDir).filter((f) => f.endsWith(".md")); } catch { continue; }
+    if (!files.length) continue;
+    out.push({ key: e.name, path: folderOf(pdir, e.name), files: files.length, memDir });
+  }
+  return out.sort((a, b) => b.files - a.files || a.key.localeCompare(b.key));
+}
+
 function locate(flags) {
-  const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude");
-  const project = mainCheckout(path.resolve(untilde(flags.project || process.cwd())));
-  const key = projectKey(project);
+  const claudeDir = claudeDirOf();
+  let project, key;
+  if (flags.key != null) {
+    // A key is taken only if it names a project found on disk, never joined into a path as given.
+    const p = listProjects(claudeDir).find((x) => x.key === flags.key);
+    if (!p) throw new Error(`No project with memory under the key ${flags.key}. Run: sleep projects`);
+    key = p.key; project = p.path;
+  } else {
+    project = mainCheckout(path.resolve(untilde(flags.project || process.cwd())));
+    key = projectKey(project);
+  }
   const pdir = path.join(claudeDir, "projects", key);
   const memDir = path.join(pdir, "memory");
   if (!fs.existsSync(memDir)) throw new Error(`No memory folder at ${memDir}`);
   // Sleep's own files live next to the memory folder, never in it, so a grep of memory never hits them.
   const state = path.resolve(untilde(flags.state || path.join(pdir, "sleep")));
-  return { claudeDir, project, key, pdir, memDir, state, config: loadConfig(state) };
+  // How to name this project to a later run of the command line: by folder when it is known, else by key.
+  const target = project ? ["--project", project] : ["--key", key];
+  return { claudeDir, project: project || key, key, target, pdir, memDir, state, config: loadConfig(state) };
 }
 
 async function context(flags) {
-  const { claudeDir, project, key, pdir, memDir, state, config } = locate(flags);
+  const { claudeDir, project, key, target, pdir, memDir, state, config } = locate(flags);
   // A flag wins over config.json, which wins over the default.
   const days = flags.days != null ? Number(flags.days) : config.days ?? DEFAULTS.days;
   if (!Number.isInteger(days) || days < 1) throw new Error("--days must be a whole number of days");
@@ -123,7 +174,7 @@ async function context(flags) {
   const live = { ...mem, files: mem.files.filter((f) => f.area !== "archive") };
   const cand = candidates(live, use, opt, u.summary.coverageDays);
   const main = (list) => list.filter((c) => live.files.find((f) => f.name === c.name)?.area === "main").map((c) => ({ ...c, rel: live.files.find((f) => f.name === c.name).rel }));
-  return { project, pdir, memDir, state, movesFile, moves, opt, mem, live, u, use, cand: { ...cand, list: main(cand.list), consolidate: main(cand.consolidate) } };
+  return { project, key, target, pdir, memDir, state, movesFile, moves, opt, mem, live, u, use, cand: { ...cand, list: main(cand.list), consolidate: main(cand.consolidate) } };
 }
 
 function buildReport(ctx, mode) {
@@ -329,7 +380,7 @@ async function schedule(flags) {
     return;
   }
   const s = parseSchedule(flags);
-  const args = command(s, { cli: CLI, project: loc.project, state: loc.state });
+  const args = command(s, { cli: CLI, target: loc.target, state: loc.state });
   const log = path.join(loc.state, "schedule.log");
   fs.mkdirSync(loc.state, { recursive: true });
   if (platform === "darwin") {
@@ -412,7 +463,7 @@ async function review(flags) {
   const file = writeReview(ctx, planned, purgeList(ctx, purgeDays(flags, ctx.state)));
   record(ctx, "review");
   console.log(`Review: ${file}`);
-  console.log(`To decide on the page: "${process.execPath}" "${CLI}" review --serve --project "${ctx.project}"`);
+  console.log(`To decide on the page: "${process.execPath}" "${CLI}" review --serve ${ctx.target.map((a) => `"${a}"`).join(" ")}`);
   if (flags.open) spawnOpen(file);
 }
 
@@ -428,12 +479,26 @@ function runCli(args) {
 }
 
 async function serveReview(flags) {
-  const loc = locate(flags);
-  const pass = ["--project", loc.project, "--state", loc.state, ...(flags.days != null ? ["--days", String(flags.days)] : [])];
+  const launch = locate(flags);
+  // Every page load and action names its project by key. The project the server started on keeps the flags it was
+  // started with; any other must be one listProjects found on disk, and uses its own state and config.
+  const pick = (k) => {
+    if (k == null || k === "" || k === launch.key) {
+      return { loc: launch, flags, pass: [...launch.target, "--state", launch.state, ...(flags.days != null ? ["--days", String(flags.days)] : [])] };
+    }
+    if (typeof k !== "string" || !listProjects(launch.claudeDir).some((p) => p.key === k)) throw new Error("No such project.");
+    const loc = locate({ key: k });
+    return { loc, flags: { key: k }, pass: loc.target };
+  };
+  const projects = () => {
+    const list = listProjects(launch.claudeDir);
+    return list.some((p) => p.key === launch.key) ? list : [{ key: launch.key, path: launch.project, files: 0 }, ...list];
+  };
   const fail = (r) => { throw new Error((r.err || r.out).trim().split("\n").pop() || "The command failed."); };
-  const draftNamed = (v) => { const d = String(v || ""); if (!DRAFT_NAME.test(d) || !fs.existsSync(path.join(loc.state, "drafts", d))) throw new Error("No such draft."); return d; };
+  const draftNamed = (loc, v) => { const d = String(v || ""); if (!DRAFT_NAME.test(d) || !fs.existsSync(path.join(loc.state, "drafts", d))) throw new Error("No such draft."); return d; };
   const actions = {
     async "/apply"(body) {
+      const { loc, pass } = pick(body?.project);
       const names = body?.moves;
       if (!Array.isArray(names) || !names.length || !names.every((x) => typeof x === "string")) throw new Error("Pick at least one move.");
       const tmp = path.join(loc.state, `only-${process.pid}.json`);
@@ -446,7 +511,8 @@ async function serveReview(flags) {
       } finally { fs.rmSync(tmp, { force: true }); }
     },
     async "/merge"(body) {
-      const d = draftNamed(body?.draft);
+      const { loc, pass } = pick(body?.project);
+      const d = draftNamed(loc, body?.draft);
       if (fs.existsSync(path.join(loc.memDir, d))) throw new Error(`A memory named ${d} already exists. Rename the draft first.`);
       const { fm } = frontmatter(fs.readFileSync(path.join(loc.state, "drafts", d), "utf8"));
       const sources = String(fm.sleep_sources || "").split(",").map((x) => x.trim()).filter(Boolean);
@@ -456,17 +522,19 @@ async function serveReview(flags) {
       return { message: r.out.trim().split("\n")[0] };
     },
     async "/note"(body) {
-      const d = draftNamed(body?.draft);
+      const { loc } = pick(body?.project);
+      const d = draftNamed(loc, body?.draft);
       const note = String(body?.note ?? "").trim();
       if (note.length > 4000) throw new Error("Keep the note under 4,000 characters.");
       saveNote(loc.state, d, note);
       return { message: note ? "Note saved." : "Note cleared." };
     },
   };
-  const render = async (nonce, token) => {
-    const ctx = await context(flags);
+  const render = async (nonce, token, url) => {
+    const { loc, flags: f } = pick(url.searchParams.get("project"));
+    const ctx = await context(f);
     const planned = planMoves(ctx.memDir, ctx.cand.list, ctx.cand.consolidate);
-    return reviewHtml(reviewData(ctx, planned, purgeList(ctx, purgeDays(flags, ctx.state))), { nonce, token });
+    return reviewHtml(reviewData(ctx, planned, purgeList(ctx, purgeDays(f, ctx.state))), { nonce, token, project: loc.key, projects: projects() });
   };
   const port = flags.port != null ? Number(flags.port) : 8767;
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error("--port must be a port number");
@@ -481,6 +549,14 @@ function spawnOpen(file) {
   import("node:child_process").then(({ spawn }) => spawn(cmd, [file], { stdio: "ignore", detached: true }).unref());
 }
 
+function projects(flags) {
+  const list = listProjects();
+  if (flags.json) { process.stdout.write(JSON.stringify(list.map(({ key, path: p, files }) => ({ key, path: p, files })), null, 2) + "\n"); return; }
+  if (!list.length) { console.log("No project has a memory folder with files in it yet."); return; }
+  const width = Math.max(...list.map((p) => String(p.files).length));
+  for (const p of list) console.log(`${String(p.files).padStart(width)} files  ${p.path ? p.path.replace(os.homedir(), "~") : `${p.key} (folder unknown: use --key ${p.key})`}`);
+}
+
 async function main() {
   const { cmd, args, flags } = parse(process.argv.slice(2));
   if (!cmd || cmd === "help" || flags.help) { process.stdout.write(HELP); return; }
@@ -493,6 +569,7 @@ async function main() {
   if (cmd === "review") return review(flags);
   if (cmd === "schedule") return schedule(flags);
   if (cmd === "merged") return merged(flags, args);
+  if (cmd === "projects") return projects(flags);
   throw new Error(`Unknown command: ${cmd}. Try: sleep help`);
 }
 

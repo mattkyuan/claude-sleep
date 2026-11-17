@@ -20,7 +20,7 @@ A bundled command line does everything that has a right answer: counting use, ch
 node "${CLAUDE_PLUGIN_ROOT}/sleep.mjs" <command>
 ```
 
-It reads the memory of the project in the current folder (a worktree maps to its main checkout). The user asked for: $ARGUMENTS
+It reads the memory of the project in the current folder (a worktree maps to its main checkout). Memory is per project: if the user names another project, or the current folder has no memory, run `projects` to list every project with memory, and pass `--project <folder>` (or `--key <key>` when the folder is unknown) to each command. The user asked for: $ARGUMENTS
 
 Pick the flow from the arguments. With none, run **report**, then offer archive or consolidate if there is anything to do.
 
@@ -56,7 +56,7 @@ Pick the flow from the arguments. With none, run **report**, then offer archive 
 
 ## archive
 
-1. Run `archive` (a dry run). It prints `Review: <path>`, a local page with every move, its evidence and every link edit. Give the user that path, and summarize: how many go to the archive, how many to the merge queue, a few example names. To pick moves one by one, the user can run the `review --serve` command that `review` prints (paths already filled in) in their own terminal; it serves the page on 127.0.0.1 with Move and Keep boxes and an Apply button. Don't start it yourself: it runs until stopped.
+1. Run `archive` (a dry run). It prints `Review: <path>`, a local page with every move, its evidence and every link edit. Give the user that path, and summarize: how many go to the archive, how many to the merge queue, a few example names. To pick moves one by one, the user can run the `review --serve` command that `review` prints (paths already filled in) in their own terminal; it serves the page on 127.0.0.1 with Move and Keep boxes, an Apply button, and a picker for the user's other projects. Don't start it yourself: it runs until stopped.
 2. Ask before running `archive --apply`, unless the user applied from the served page.
 3. After it runs, give the commit hashes from the report, and how to undo: `restore <file>`, or `restore --all` for the whole run.
 

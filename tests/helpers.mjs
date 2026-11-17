@@ -29,14 +29,15 @@ export function fixture() {
   };
   let n = 0;
   // One session = one .jsonl; entries are [kind, payload] pairs turned into log lines.
-  const session = (entries, { ageDays = 1, dir = pdir, sub = null } = {}) => {
+  const session = (entries, { ageDays = 1, dir = pdir, sub = null, cwd = null } = {}) => {
     const sid = `s${++n}`;
     const at = new Date(Date.now() - ageDays * DAY).toISOString();
     const lines = [];
     for (const [i, e] of entries.entries()) {
       const id = `toolu_${sid}_${i}`;
-      lines.push(JSON.stringify({ type: "assistant", timestamp: at, message: { content: [{ type: "tool_use", id, name: e.tool, input: e.input || {} }] } }));
-      lines.push(JSON.stringify({ type: "user", timestamp: at, message: { content: [{ type: "tool_result", tool_use_id: id, content: e.result ?? "" }] } }));
+      const where = cwd ? { cwd } : {};
+      lines.push(JSON.stringify({ type: "assistant", timestamp: at, ...where, message: { content: [{ type: "tool_use", id, name: e.tool, input: e.input || {} }] } }));
+      lines.push(JSON.stringify({ type: "user", timestamp: at, ...where, message: { content: [{ type: "tool_result", tool_use_id: id, content: e.result ?? "" }] } }));
     }
     let file = path.join(dir, `${sid}.jsonl`);
     if (sub) { fs.mkdirSync(path.join(dir, sid, "subagents"), { recursive: true }); fs.writeFileSync(file, ""); file = path.join(dir, sid, "subagents", `${sub}.jsonl`); }
