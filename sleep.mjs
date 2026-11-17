@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { readMemory } from "./lib/memory.mjs";
+import { readMemory, INDEX } from "./lib/memory.mjs";
 import { usage, loadLedger, saveLedger } from "./lib/usage.mjs";
 import { DEFAULTS, checks, candidates } from "./lib/checks.mjs";
 import { writeReport } from "./lib/report.mjs";
@@ -18,7 +18,8 @@ import { memoryGraph } from "./lib/graph.mjs";
 import { mapHtml, mapCsp } from "./lib/map.mjs";
 import { startServer } from "./lib/serve.mjs";
 import { spawn } from "node:child_process";
-import { DRAFT_NAME, MAX_BATCH, sourcesOf, systemPrompt, buildInput, parseDrafts, checkDrafts } from "./lib/draft.mjs";
+import { indexSystemPrompt, buildIndexInput, parseIndexChanges, checkIndexChanges, applyChanges, indexFolder } from "./lib/index.mjs";
+import { DRAFT_NAME, MAX_BATCH, sourcesOf, systemPrompt, buildInput, parseDrafts, checkDrafts, checkFacts, hashText, loadMeta, saveMeta } from "./lib/draft.mjs";
 
 const CLI = fileURLToPath(import.meta.url);
 const loadConfig = (state) => { try { const c = JSON.parse(fs.readFileSync(path.join(state, "config.json"), "utf8")); return c && typeof c === "object" ? c : {}; } catch { return {}; } };
@@ -41,6 +42,7 @@ Usage:
   sleep stats [options]           how well sleep is doing: size over time, restores and re-reads (its error rate), merges
   sleep queue [options]           the consolidation queue, grouped by the hub that links to each memory
   sleep merged --into <file> <queued>...  record a merge: archive the sources, point their links at <file>
+  sleep index-apply --changes <file.json> apply checked line changes to MEMORY.md (and its hubs), and commit
 
 Options:
   --project DIR      the project whose memory to read (default: the current folder)
@@ -299,8 +301,9 @@ async function restore(flags, args) {
 // The consolidation queue, grouped by the file that links to each memory (a hub, usually), so related lessons can be
 // merged together. A memory nothing in the main folder links to is "unfiled".
 // The consolidation queue grouped by the main file that links to each memory (usually a hub), largest first.
-function queueTopics(ctx) {
-  const queued = ctx.live.files.filter((f) => f.area === "consolidate");
+function queueTopics(ctx, { withPlanned = false } = {}) {
+  const planned = withPlanned ? new Set(ctx.cand.consolidate.map((c) => c.name)) : new Set();
+  const queued = ctx.live.files.filter((f) => f.area === "consolidate" || (f.area === "main" && planned.has(f.name)));
   const mainNames = new Set(ctx.live.files.filter((f) => f.area === "main").map((f) => f.name));
   const topics = new Map();
   for (const f of queued) {
@@ -336,6 +339,11 @@ async function merged(flags, sources) {
     if (!m || !fs.existsSync(path.join(ctx.memDir, m.to))) throw new Error(`${s} is not in the consolidation queue.`);
     return m;
   });
+  const meta = loadMeta(ctx.state);
+  for (const m of picked) {
+    const want = meta[into]?.sources?.[m.name];
+    if (want && hashText(fs.readFileSync(path.join(ctx.memDir, m.to), "utf8")) !== want) throw new Error(`${m.name} changed since Claude read it. Redo ${into} first.`);
+  }
   const targets = planMoves(ctx.memDir, picked.map((m) => ({ name: m.name, rel: m.to })), []);
   ensureRepo(ctx.memDir);
   commitAll(ctx.memDir, "sleep: snapshot before merging", [into]);
@@ -356,6 +364,7 @@ async function merged(flags, sources) {
   setHint(ctx.memDir, true);
   pruneEmpty(ctx.memDir);
   saveMoves(ctx.movesFile, ctx.moves);
+  if (meta[into]) { delete meta[into]; saveMeta(ctx.state, meta); }
   record(ctx, "merged", { merged: { into, sources: picked.map((m) => m.name) } });
   const hash = commitAll(ctx.memDir, `sleep: merged ${picked.length} into ${into}`);
   if (flags.json) process.stdout.write(JSON.stringify({ into, sources: targets, commit: hash }, null, 2) + "\n");
@@ -427,7 +436,7 @@ function saveNote(state, draft, note) {
 }
 function readDrafts(ctx) {
   const dir = path.join(ctx.state, "drafts");
-  const notes = loadNotes(ctx.state), open = openNotes(ctx.state);
+  const notes = loadNotes(ctx.state), open = openNotes(ctx.state), meta = loadMeta(ctx.state);
   let names = []; try { names = fs.readdirSync(dir).filter((n) => n.endsWith(".md")).sort(); } catch {}
   return names.map((name) => {
     const text = fs.readFileSync(path.join(dir, name), "utf8");
@@ -435,10 +444,36 @@ function readDrafts(ctx) {
     const list = String(fm.sleep_sources || "").split(",").map((x) => x.trim()).filter(Boolean);
     const sources = list.map((sn) => {
       const f = ctx.live.files.find((x) => x.name === sn || x.rel === sn);
-      return { name: sn, queued: f?.area === "consolidate", description: f?.description, body: f?.body, bytes: f?.bytes || 0 };
+      const want = meta[name]?.sources?.[sn];
+      const changed = !!(want && f && hashText(fs.readFileSync(path.join(ctx.memDir, f.rel), "utf8")) !== want);
+      return { name: sn, queued: f?.area === "consolidate", planned: !!f && f.area === "main" && ctx.cand.consolidate.some((c) => c.name === sn), changed, description: f?.description, body: f?.body, bytes: f?.bytes || 0 };
     });
-    return { name, note: notes[name]?.note || "", noteOpen: !!open[name], description: typeof fm.description === "string" ? fm.description : "", body: text.replace(SOURCES_LINE, ""), sources, beforeBytes: sources.reduce((a, x) => a + x.bytes, 0), afterBytes: Buffer.byteLength(text.replace(SOURCES_LINE, "")) };
+    const facts = checkFacts(text, sources.map((s) => s.body || ""));
+    return { name, topic: meta[name]?.topic || "other", stale: sources.filter((s) => s.changed).map((s) => s.name), note: notes[name]?.note || "", noteOpen: !!open[name], description: typeof fm.description === "string" ? fm.description : "", body: text.replace(SOURCES_LINE, ""), sources, facts, beforeBytes: sources.reduce((a, x) => a + x.bytes, 0), afterBytes: Buffer.byteLength(text.replace(SOURCES_LINE, "")) };
   });
+}
+
+// The batches Consolidate everything would send: up to MAX_BATCH memories per topic, at least 2 per batch, skipping
+// memories a draft already names, so a stopped run picks up where it left off. want limits it to some topics.
+// read.json: each memory a finished batch read, with a hash of what it read, so a memory Claude left unmerged is not
+// sent again until it changes.
+const readFile = (state) => path.join(state, "read.json");
+function loadRead(state) { try { return JSON.parse(fs.readFileSync(readFile(state), "utf8")); } catch { return {}; } }
+function saveRead(state, add) { fs.mkdirSync(state, { recursive: true }); fs.writeFileSync(readFile(state), JSON.stringify({ ...loadRead(state), ...add }, null, 2)); }
+function planBatches(ctx, want = null) {
+  const { list } = queueTopics(ctx, { withPlanned: true });
+  const draftsDir = path.join(ctx.state, "drafts");
+  let names = []; try { names = fs.readdirSync(draftsDir).filter((x) => DRAFT_NAME.test(x)); } catch {}
+  const covered = new Set(names.flatMap((d) => sourcesOf(fs.readFileSync(path.join(draftsDir, d), "utf8"))));
+  const read = loadRead(ctx.state);
+  for (const t of list) for (const x of t.files) if (read[x.name] && read[x.name] === hashText(fs.readFileSync(path.join(ctx.memDir, x.rel), "utf8"))) covered.add(x.name);
+  const batches = [];
+  for (const t of list) {
+    if (want && !want.has(t.topic)) continue;
+    const free = t.files.filter((x) => !covered.has(x.name));
+    for (let i = 0; i < free.length; i += MAX_BATCH) { const b = free.slice(i, i + MAX_BATCH); if (b.length >= 2) batches.push({ topic: t.topic, files: b }); }
+  }
+  return batches;
 }
 
 // What archive would do now, plus any merge drafts, for the review page. Reads only.
@@ -453,8 +488,16 @@ function reviewData(ctx, planned, purge) {
     hint: { add: planned.length > 0 && !hasHint(ctx.memDir), present: hasHint(ctx.memDir), line: HINT },
     drafts: readDrafts(ctx),
     queued: ctx.live.files.filter((f) => f.area === "consolidate").length,
-    topics: queueTopics(ctx).list.map((t) => ({ topic: t.topic, count: t.files.length })),
+    topics: queueTopics(ctx, { withPlanned: true }).list.map((t) => ({ topic: t.topic, count: t.files.length })),
+    keep: Math.max(0, ctx.live.files.filter((f) => f.area === "main" && f.name !== "MEMORY.md").length - planned.length),
   };
+  const p = loadProposal(ctx.state);
+  if (p) {
+    let now = ""; try { now = fs.readFileSync(path.join(ctx.memDir, INDEX), "utf8"); } catch {}
+    r.indexProposal = { ...p, stale: hashText(now) !== p.indexHash };
+  }
+  const batches = planBatches(ctx);
+  r.pool = { memories: batches.reduce((a, b) => a + b.files.length, 0), topics: new Set(batches.map((b) => b.topic)).size, batches: batches.length };
   return r;
 }
 
@@ -508,24 +551,37 @@ async function serveReview(flags) {
   const fail = (r) => { throw new Error((r.err || r.out).trim().split("\n").pop() || "The command failed."); };
   let lastUsed = Date.now();
   // One Claude drafting job at a time, across projects. The child is killed if the server stops.
-  let job = null, child = null;
-  process.on("exit", () => { try { child?.kill(); } catch {} });
+  let job = null;
+  const children = new Set();
+  const killAll = () => { for (const c of children) { try { c.kill(); } catch {} } };
+  process.on("exit", killAll);
   const RULES = fs.readFileSync(path.join(path.dirname(CLI), "docs", "merge-rules.md"), "utf8");
-  const runClaude = (input) => new Promise((resolve) => {
+  const runClaude = (input, system = systemPrompt(RULES)) => new Promise((resolve) => {
     // No tools, no MCP servers or connectors, no slash commands, nothing saved, in an empty folder outside the
     // project, and the memory text on stdin rather than in the arguments (other processes can read arguments).
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "sleep-draft-"));
-    const args = ["-p", "--tools", "", "--strict-mcp-config", "--disable-slash-commands", "--no-session-persistence", "--output-format", "json", "--system-prompt", systemPrompt(RULES)];
-    child = spawn(process.env.SLEEP_CLAUDE || "claude", args, { cwd, stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, ENABLE_CLAUDEAI_MCP_SERVERS: "false" } });
+    const args = ["-p", "--tools", "", "--strict-mcp-config", "--disable-slash-commands", "--no-session-persistence", "--output-format", "json", "--system-prompt", system];
+    const child = spawn(process.env.SLEEP_CLAUDE || "claude", args, { cwd, stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, ENABLE_CLAUDEAI_MCP_SERVERS: "false" } });
+    children.add(child);
     let out = "", err = "";
-    const timer = setTimeout(() => child?.kill(), 15 * 60_000);
+    const timer = setTimeout(() => child.kill(), 15 * 60_000);
     child.stdout.on("data", (c) => (out += c));
     child.stderr.on("data", (c) => (err += c));
     child.on("error", (e) => (err += e.message));
-    child.on("close", (code) => { clearTimeout(timer); child = null; fs.rmSync(cwd, { recursive: true, force: true }); resolve({ code, out, err }); });
+    child.on("close", (code) => { clearTimeout(timer); children.delete(child); fs.rmSync(cwd, { recursive: true, force: true }); resolve({ code, out, err }); });
     child.stdin.on("error", () => {});
     child.stdin.end(input);
   });
+  // Writes checked drafts and records, per draft, its topic and a hash of each source as Claude read it.
+  const writeDrafts = (loc, drafts, texts, topic) => {
+    const draftsDir = path.join(loc.state, "drafts"), meta = loadMeta(loc.state);
+    fs.mkdirSync(draftsDir, { recursive: true });
+    for (const d of drafts) {
+      fs.writeFileSync(path.join(draftsDir, d.name), d.text);
+      meta[d.name] = { topic, at: new Date().toISOString(), sources: Object.fromEntries(sourcesOf(d.text).map((x) => [x, hashText(texts.get(x))])) };
+    }
+    saveMeta(loc.state, meta);
+  };
   const answerOf = (r) => {
     if (r.code !== 0) throw new Error((r.err || r.out).trim().split("\n").pop() || `claude exited with ${r.code}.`);
     let j; try { j = JSON.parse(r.out); } catch { throw new Error("claude did not answer in JSON."); }
@@ -573,7 +629,8 @@ async function serveReview(flags) {
       if (job?.state === "running") throw new Error("Claude is already drafting. Wait for it to finish.");
       const { loc, flags: f } = pick(body?.project);
       const ctx = await context(f);
-      const queued = new Map(queueTopics(ctx).queued.map((x) => [x.name, x]));
+      const topics = queueTopics(ctx, { withPlanned: true });
+      const queued = new Map(topics.queued.map((x) => [x.name, x]));
       const read = (name) => ({ name, text: fs.readFileSync(path.join(ctx.memDir, queued.get(name).rel), "utf8") });
       let batch, hub = null, redo = null, label;
       if (body?.redo != null) {
@@ -585,7 +642,7 @@ async function serveReview(flags) {
         redo = { name: d, text, note: loadNotes(loc.state)[d]?.note || "" };
         label = `redo of ${d}`;
       } else {
-        const t = queueTopics(ctx).list.find((x) => x.topic === body?.topic);
+        const t = topics.list.find((x) => x.topic === body?.topic);
         if (!t) throw new Error("That topic is not in Consolidate.");
         batch = t.files.slice(0, MAX_BATCH).map((x) => read(x.name));
         const h = t.topic !== "unfiled" && ctx.live.files.find((x) => x.name === t.topic && x.area === "main");
@@ -597,11 +654,135 @@ async function serveReview(flags) {
       const mine = job;
       runClaude(buildInput({ batch, hub, redo })).then((r) => {
         const drafts = checkDrafts(parseDrafts(answerOf(r)), { batch: batch.map((x) => x.name), memDir: ctx.memDir, draftsDir, redo: redo?.name });
-        fs.mkdirSync(draftsDir, { recursive: true });
-        for (const d of drafts) fs.writeFileSync(path.join(draftsDir, d.name), d.text);
+        const topic = (redo ? loadMeta(loc.state)[redo.name]?.topic : null) ?? (body?.topic || null);
+        writeDrafts(loc, drafts, new Map(batch.map((x) => [x.name, x.text])), topic);
         Object.assign(mine, { state: "done", message: `Claude wrote ${drafts.length} draft(s): ${drafts.map((d) => d.name).join(", ")}.` });
       }).catch((e) => Object.assign(mine, { state: "failed", message: String(e?.message || e) }));
       return { message: `Claude is drafting: ${label}.` };
+    },
+    async "/apply-all"(body) {
+      if (job?.state === "running") throw new Error("Something is already running. Wait for it to finish.");
+      const { loc, pass } = pick(body?.project);
+      const moves = Array.isArray(body?.moves) ? body.moves.filter((x) => typeof x === "string") : [];
+      const drafts = (Array.isArray(body?.drafts) ? body.drafts : []).map((d) => draftNamed(loc, d));
+      if (!moves.length && !drafts.length) throw new Error("Pick at least one move or merge.");
+      const sources = new Map(drafts.map((d) => [d, sourcesOf(fs.readFileSync(path.join(loc.state, "drafts", d), "utf8"))]));
+      job = { kind: "apply", project: loc.key, label: `${moves.length} move(s) and ${drafts.length} merge(s)`, state: "running", started: new Date().toISOString(), message: "", results: [] };
+      const mine = job;
+      (async () => {
+        // A draft's planned sources move with the picked files, so its merge finds them in Consolidate.
+        const only = [...new Set([...moves, ...[...sources.values()].flat()])];
+        const tmp = path.join(loc.state, `only-${process.pid}.json`);
+        fs.mkdirSync(loc.state, { recursive: true });
+        fs.writeFileSync(tmp, JSON.stringify(only));
+        let moved, memDir = "";
+        try { const r = await runCli(["archive", "--apply", "--only", tmp, ...pass]); if (r.code !== 0) fail(r); moved = r.out.trim().split("\n")[0]; }
+        finally { fs.rmSync(tmp, { force: true }); }
+        for (const d of drafts) {
+          const r = await runCli(["merged", "--into", d, ...sources.get(d), ...pass]);
+          const undo = /git -C "(.+)" revert ([0-9a-f]+)\s*$/.exec(r.out.trim());
+          if (undo) memDir = undo[1];
+          mine.results.push({ draft: d, ok: r.code === 0, reason: r.code === 0 ? "" : (r.err || r.out).trim().split("\n").pop(), commit: r.code === 0 && undo ? undo[2] : null });
+        }
+        const ok = mine.results.filter((x) => x.ok).length, skipped = mine.results.filter((x) => !x.ok);
+        const commits = mine.results.map((x) => x.commit).filter(Boolean).reverse();
+        // restore --all only half undoes a merge (the merged file and its links stay), so merges undo with git revert.
+        const undo = commits.length ? ` Undo the merges with: git -C "${memDir}" revert --no-edit ${commits.join(" ")} (sleep's move records do not follow a git revert yet).` : moves.length ? " Undo the moves: sleep restore --all." : "";
+        mine.message = `${moved} Merged ${ok} of ${drafts.length}.${skipped.length ? ` Skipped: ${skipped.map((x) => `${x.draft} (${x.reason})`).join("; ")}.` : ""}${undo}`;
+        mine.state = "done";
+      })().catch((e) => Object.assign(mine, { state: "failed", message: String(e?.message || e) }));
+      return { message: "Applying." };
+    },
+    // Consolidate everything (or the named topics): batches of up to 10 per topic, three at a time. A memory a draft
+    // already names is skipped, so a stopped run picks up where it left off. One failed batch does not stop the rest.
+    async "/consolidate"(body) {
+      if (job?.state === "running") throw new Error("Something is already running. Wait for it to finish.");
+      const { loc, flags: f } = pick(body?.project);
+      const ctx = await context(f);
+      const draftsDir = path.join(loc.state, "drafts");
+      const want = Array.isArray(body?.topics) ? new Set(body.topics.filter((x) => typeof x === "string")) : null;
+      const batches = planBatches(ctx, want);
+      const topics = {};
+      for (const b of batches) { const t = (topics[b.topic] ||= { batches: 0, done: 0, running: 0, memories: 0, became: 0, failed: 0 }); t.batches++; t.memories += b.files.length; }
+      const progress = { total: batches.length, done: 0, failed: 0, running: 0, read: 0, became: 0, topics };
+      job = { kind: "consolidate", project: loc.key, label: `${batches.length} batch(es) in ${new Set(batches.map((b) => b.topic)).size} topic(s)`, state: "running", started: new Date().toISOString(), message: "", progress, errors: [] };
+      const mine = job, taken = new Set();
+      if (!batches.length) { Object.assign(mine, { state: "done", message: "Nothing left to consolidate: every memory is already in a draft, or alone in its topic." }); return { message: mine.message }; }
+      const hubText = (topic) => { const h = topic !== "unfiled" && ctx.live.files.find((x) => x.name === topic && x.area === "main"); return h ? { name: h.name, text: fs.readFileSync(path.join(ctx.memDir, h.rel), "utf8") } : null; };
+      const runBatch = async (b) => {
+        const batch = b.files.map((x) => ({ name: x.name, text: fs.readFileSync(path.join(ctx.memDir, x.rel), "utf8") }));
+        const r = await runClaude(buildInput({ batch, hub: hubText(b.topic), redo: null }));
+        if (mine.state !== "running") return;
+        const drafts = checkDrafts(parseDrafts(answerOf(r)), { batch: batch.map((x) => x.name), memDir: ctx.memDir, draftsDir, renameClashes: true, taken });
+        for (const d of drafts) taken.add(d.name);
+        writeDrafts(loc, drafts, new Map(batch.map((x) => [x.name, x.text])), b.topic);
+        saveRead(loc.state, Object.fromEntries(batch.map((x) => [x.name, hashText(x.text)])));
+        progress.read += batch.length; progress.became += drafts.length; topics[b.topic].became += drafts.length;
+      };
+      let next = 0;
+      const worker = async () => {
+        while (mine.state === "running" && next < batches.length) {
+          const b = batches[next++];
+          const t = topics[b.topic];
+          progress.running++; t.running++;
+          try { await runBatch(b); } catch (e) { if (mine.state === "running") { progress.failed++; t.failed++; mine.errors.push(`${b.topic}: ${String(e?.message || e)}`); } }
+          finally { progress.running--; progress.done++; t.running--; t.done++; }
+        }
+      };
+      const lanes = Math.max(1, Number(process.env.SLEEP_CONCURRENCY) || 3);
+      Promise.all(Array.from({ length: lanes }, worker)).then(() => {
+        if (mine.state !== "running") return;
+        mine.state = "done";
+        mine.message = `Claude read ${progress.read} memories and wrote ${progress.became} merged memories.${progress.failed ? ` ${progress.failed} batch(es) failed: ${mine.errors.slice(0, 3).join("; ")}` : ""}`;
+      });
+      return { message: `Claude is consolidating: ${mine.label}.` };
+    },
+    // Tighten MEMORY.md: Claude proposes line changes; the server keeps those that pass the checks and saves them with
+    // a hash of the index Claude read. The page shows them from that file; Apply runs sleep index-apply.
+    async "/index"(body) {
+      if (job?.state === "running") throw new Error("Something is already running. Wait for it to finish.");
+      const { loc, flags: f } = pick(body?.project);
+      const ctx = await context(f);
+      const indexText = fs.readFileSync(path.join(ctx.memDir, INDEX), "utf8");
+      const folder = indexFolder(ctx.memDir);
+      const linked = ctx.live.files.filter((x) => x.area === "main" && x.linkedFrom.includes(INDEX));
+      const files = linked.map((x) => ({ name: x.name, type: x.type, description: x.description, lastUsed: day(ctx.use.of(x).last), sessions: ctx.use.of(x).sessions }));
+      const hubs = linked.filter((x) => x.links.length >= 3).map((x) => ({ name: x.name, text: folder.textOf(x.name) }));
+      const note = typeof body?.note === "string" ? body.note.slice(0, 2000) : "";
+      job = { kind: "index", project: loc.key, label: "MEMORY.md", state: "running", started: new Date().toISOString(), message: "" };
+      const mine = job;
+      (async () => {
+        const r = await runClaude(buildIndexInput({ indexText, files, hubs, days: ctx.opt.days, note }), indexSystemPrompt());
+        if (mine.state !== "running") return;
+        const { ok, refused, after } = checkIndexChanges(parseIndexChanges(answerOf(r)), { indexText, folder });
+        ok.forEach((c, i) => (c.id = `c${i + 1}`));
+        fs.mkdirSync(loc.state, { recursive: true });
+        fs.writeFileSync(proposalFile(loc.state), JSON.stringify({ at: new Date().toISOString(), indexHash: hashText(indexText), before: { lines: indexText.split("\n").length, bytes: Buffer.byteLength(indexText) }, after, changes: ok, refused }, null, 2));
+        mine.state = "done";
+        mine.message = `Claude proposed ${ok.length + refused.length} change(s) to MEMORY.md; ${ok.length} passed the checks.${refused.length ? ` Refused: ${refused.map((c) => c.why).join("; ")}` : ""}`;
+      })().catch((e) => Object.assign(mine, { state: "failed", message: String(e?.message || e) }));
+      return { message: "Claude is reading MEMORY.md." };
+    },
+    async "/index-apply"(body) {
+      if (job?.state === "running") throw new Error("Something is already running. Wait for it to finish.");
+      const { loc, pass } = pick(body?.project);
+      const p = loadProposal(loc.state);
+      if (!p) throw new Error("No proposal for MEMORY.md. Ask Claude first.");
+      const ids = new Set(Array.isArray(body?.ids) ? body.ids.filter((x) => typeof x === "string") : []);
+      const picked = p.changes.filter((c) => ids.has(c.id));
+      if (!picked.length) throw new Error("Pick at least one change.");
+      const tmp = path.join(loc.state, `index-${process.pid}.json`);
+      fs.writeFileSync(tmp, JSON.stringify(picked));
+      try { const r = await runCli(["index-apply", "--changes", tmp, ...pass]); if (r.code !== 0) fail(r); return { message: r.out.trim() }; }
+      finally { fs.rmSync(tmp, { force: true }); }
+    },
+    async "/stop-job"() {
+      if (job?.state !== "running") return { message: "Nothing is running." };
+      if (job.kind === "apply") throw new Error("Apply cannot stop halfway: each step is its own commit. It finishes in a moment.");
+      job.state = "stopped";
+      job.message = "Stopped. Drafts already written are kept; run again to pick up the rest.";
+      killAll();
+      return { message: job.message };
     },
     async "/job"() { return { job }; },
     // For sleep open: proves a recorded server is this one (only it knows the key), and stops it.
@@ -709,6 +890,35 @@ function projects(flags) {
   for (const p of list) console.log(`${String(p.files).padStart(width)} files  ${p.path ? p.path.replace(os.homedir(), "~") : `${p.key} (folder unknown: use --key ${p.key})`}`);
 }
 
+// The proposal Claude made for MEMORY.md, as the server checked it, with a hash of the index it read.
+const proposalFile = (state) => path.join(state, "index-proposal.json");
+function loadProposal(state) { try { return JSON.parse(fs.readFileSync(proposalFile(state), "utf8")); } catch { return null; } }
+
+// sleep index-apply --changes <file.json>: exact line changes to MEMORY.md (and lines added to hubs), checked again
+// against the folder as it is now, then written and committed.
+async function indexApply(flags) {
+  if (!flags.changes) throw new Error("Usage: sleep index-apply --changes <file.json>");
+  let changes; try { changes = JSON.parse(fs.readFileSync(path.resolve(untilde(flags.changes)), "utf8")); } catch { throw new Error("--changes needs a file holding a JSON list of changes"); }
+  if (!Array.isArray(changes) || !changes.length) throw new Error("--changes needs a file holding a JSON list of changes");
+  const list = changes.map((c) => ({ kind: String(c?.kind || ""), reason: String(c?.reason || ""), hub: c?.hub ? String(c.hub) : null, old: String(c?.old ?? ""), new: String(c?.new ?? ""), add: String(c?.add ?? "") }));
+  const ctx = await context(flags);
+  const file = path.join(ctx.memDir, INDEX);
+  const indexText = fs.readFileSync(file, "utf8");
+  const folder = indexFolder(ctx.memDir);
+  const { ok, refused } = checkIndexChanges(list, { indexText, folder });
+  if (refused.length) throw new Error(`Nothing changed. ${refused.map((c) => `"${c.old.slice(0, 60)}": ${c.why}`).join("; ")}`);
+  const next = applyChanges(indexText, new Map(), ok, folder.textOf);
+  ensureRepo(ctx.memDir);
+  commitAll(ctx.memDir, "sleep: snapshot before tightening MEMORY.md");
+  fs.writeFileSync(file, next.indexText);
+  for (const [hub, text] of next.hubTexts) fs.writeFileSync(path.join(ctx.memDir, hub), text);
+  record(ctx, "index", { index: { changes: ok.length } });
+  const hash = commitAll(ctx.memDir, `sleep: tightened MEMORY.md (${ok.length} change${ok.length === 1 ? "" : "s"})`);
+  const p = loadProposal(ctx.state);
+  if (p) fs.rmSync(proposalFile(ctx.state), { force: true });
+  console.log(`Changed ${ok.length} line(s) in MEMORY.md. Undo with: git -C "${ctx.memDir}" revert ${hash}`);
+}
+
 async function main() {
   const { cmd, args, flags } = parse(process.argv.slice(2));
   if (!cmd || cmd === "help" || flags.help) { process.stdout.write(HELP); return; }
@@ -721,6 +931,7 @@ async function main() {
   if (cmd === "review") return review(flags);
   if (cmd === "schedule") return schedule(flags);
   if (cmd === "merged") return merged(flags, args);
+  if (cmd === "index-apply") return indexApply(flags);
   if (cmd === "projects") return projects(flags);
   if (cmd === "open") return openPage(flags);
   throw new Error(`Unknown command: ${cmd}. Try: sleep help`);

@@ -31,6 +31,14 @@ Then run `/sleep` in any project. Requires Node 18 or later and git.
 | `/sleep schedule` | Runs sleep on its own, weekly by default and report only |
 | `/sleep stats` | How well sleep is doing over time |
 
+## Consolidate with Claude
+
+On the served page (`sleep open`), **Consolidate everything** runs `claude -p` with no tools, no MCP servers and nothing saved, in an empty folder, on every memory headed for Consolidate: batches of up to 10 per topic, 3 at a time, on your Claude plan. The page shows progress per topic and a Stop button, and you can close the tab. Claude reads a memory once: a later run sends only memories it has not read, or that changed since.
+
+The server checks every draft before writing it: a safe name, at least 2 sources from the batch, and a count of the PR and issue numbers, dates, versions and paths its sources hold that it kept. The result shows memories and size before and after, then one row per topic to tick. A draft starts unticked when it dropped one of those facts, or when a source changed since Claude read it. Nothing changes until Apply: it moves the ticked files, then merges each ticked draft, and commits.
+
+**Tighten MEMORY.md** asks Claude for line changes to the index: move a closed topic's line to a hub MEMORY.md links, or shorten a line. The server refuses a change unless the old line is in MEMORY.md exactly, every file MEMORY.md links stays reachable from it or a hub it links, it adds no em dash, and the index stays within 200 lines and 25 KB. The page says which files lose the index's protection from archiving. Apply runs `index-apply`, one commit, undone with `git revert`.
+
 ## Run the command line directly
 
 ```bash
@@ -52,9 +60,10 @@ node sleep.mjs archive --apply --project ~/code/my-project
 | `restore <file>` | Puts a moved file back where it was, links and all. `--all` undoes every move. |
 | `queue` | What is in Consolidate, grouped by the hub that links to each memory |
 | `merged --into <file> <queued>...` | Records a merge the skill wrote: archives the sources and points their links at the merged file |
-| `review --serve [--port N]` | The same page on 127.0.0.1, where you decide: tick or untick each move, Move all or Keep all per hub, Apply; approve a merge draft, or leave Claude a note to redo it. A picker at the top switches to any other project with memory. The address carries a private key; every action is checked against sleep's own plan and runs the command line, so it is committed and can be undone. |
-| `open [--stop]` | Start the served page in the background, or reuse it, and open it in your browser. It stops by itself after 2 hours unused. From the page, Draft with Claude runs `claude -p` with no tools on one queued topic (up to 10 memories) and writes the drafts it returns after checking them; nothing merges until you approve. It runs on your Claude plan. |
-| 3D map | On the served page, **3D map** draws every memory file on its floor (MEMORY.md, Keep, Consolidate, Archive) with its links. **Before** shows the folder now; **After** shows it once the plan and the merge drafts are applied, and the files move between floors. Read only. |
+| `index-apply --changes <file.json>` | Applies line changes to MEMORY.md (and lines added to its hubs) that the served page proposed, after checking them again, in one commit |
+| `review --serve [--port N]` | The same page on 127.0.0.1, where you decide: tick or untick each move and each merge draft, Move all or Keep all per hub, then one Apply moves the files and merges the ticked drafts; leave Claude a note to redo a draft. A picker at the top switches to any other project with memory. The address carries a private key; every action is checked against sleep's own plan and runs the command line, so it is committed and can be undone. |
+| `open [--stop]` | Start the served page in the background, or reuse it, and open it in your browser. It stops by itself after 2 hours unused. See "Consolidate with Claude" below. |
+| 3D map | On the served page, **3D map** draws every memory file on its floor (MEMORY.md, Keep, Consolidate, Archive) with its links. Four steps, with Play: the folder now, the planned moves, Claude's drafts clustered by topic beside the files they replace, and the folder once applied (drafts flagged to check are left out, as on the page). Read only. |
 | `projects [--json]` | Every project with memory, with its folder and file count. Memory is per project, so this is the way to find the others. |
 | `review [--open]` | A local page with every proposed move, its evidence, each link edit as before and after, and merge drafts beside their sources. Changes nothing. An `archive` dry run writes one too. |
 | `stats` | Memory size over time, and sleep's error rate: files restored after archiving, or read again from the archive |

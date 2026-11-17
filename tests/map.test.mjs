@@ -48,6 +48,31 @@ test("the map shows each memory on its floor before the plan and after it, with 
   assert.ok(!r.body.includes("Epsilon explains"), "no memory text on the map, only names and descriptions");
 });
 
+test("the map has four steps: drafts join their topic at step 3, and only drafts that start ticked apply at step 4", async (t) => {
+  const { fx, flags } = setup();
+  fx.write("theta.md", mem("theta", "feedback", "Slow suite", "Theta says to run the slow browser suite on the merge queue, since #193."));
+  fx.write("iota.md", mem("iota", "feedback", "Retry", "Iota says to retry a flaky browser test once, then quarantine it."));
+  fx.write("kappa.md", mem("kappa", "feedback", "Lint", "Kappa says to run the linter on changed files before every push."));
+  fx.write("lambda.md", mem("lambda", "feedback", "Format", "Lambda says the formatter must run with the pinned version in CI."));
+  fx.write("hub_tests.md", mem("hub_tests", "reference", "Tests", "- [Theta](theta.md)\n- [Iota](iota.md)\n- [Kappa](kappa.md)\n- [Lambda](lambda.md)"));
+  fx.write("MEMORY.md", "# Index\n- [Alpha](alpha.md): deploys\n- [Hub](hub_ops.md): ops\n- [Tests](hub_tests.md): tests\n", 1);
+  const dir = path.join(fx.state, "drafts");
+  fs.mkdirSync(dir, { recursive: true });
+  const draft = (name, srcs) => fs.writeFileSync(path.join(dir, name), `---\nname: ${name.slice(0, -3)}\ndescription: x\nsleep_sources: ${srcs.join(", ")}\nmetadata:\n  type: feedback\n---\n\nMerged.\n`);
+  draft("suites.md", ["theta.md", "iota.md"]); // drops #193: flagged
+  draft("push.md", ["kappa.md", "lambda.md"]);
+  fs.writeFileSync(path.join(fx.state, "drafts.json"), JSON.stringify({ "suites.md": { topic: "hub_tests.md", sources: {} }, "push.md": { topic: "hub_tests.md", sources: {} } }));
+  const { get } = await open(t, fx, flags);
+  const g = graphOf((await get("/map")).body);
+  const node = (id) => g.nodes.find((n) => n.id === id);
+  assert.deepEqual(node("kappa.md").at, ["memory", "queue", "queue", "archive"]);
+  assert.equal(node("kappa.md").topic, "hub_tests.md");
+  assert.deepEqual([node("push.md").at, node("push.md").status], [[null, null, "queue", "memory"], "new"]);
+  assert.deepEqual([node("suites.md").at, node("suites.md").status], [[null, null, "queue", null], "held"], "a flagged draft does not apply by default");
+  assert.deepEqual([node("theta.md").at, node("theta.md").status], [["memory", "queue", "queue", "queue"], "queue"], "its sources stay in Consolidate");
+  assert.deepEqual(node("beta.md").at, ["memory", "archive", "archive", "archive"]);
+});
+
 function writeOnly(fx, names) {
   const f = path.join(fx.state, "only-test.json");
   fs.mkdirSync(fx.state, { recursive: true });

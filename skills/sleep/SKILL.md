@@ -68,14 +68,14 @@ Merging is the one place where you write memory. Work on one topic per run unles
 2. Read every memory in the batch (`<memDir>/<rel>`) and the hub that links to them.
 3. Group the memories that state the same rule or lesson. Draft one merged memory per group, not one per topic. A memory that fits no group stays in Consolidate; don't force it.
 4. Write each merged memory by the rules in `${CLAUDE_PLUGIN_ROOT}/docs/merge-rules.md` (read it first). The served page's Draft with Claude button follows the same file.
-5. Write each draft to the `drafts` folder as `<name>.md`, with one extra frontmatter line naming its sources: `sleep_sources: a.md, b.md`. Then run `review`; it prints `Review: <path>`, a page showing each draft beside its sources. Give the user that path. On the served page (`open`) they can approve a merge, leave a note, or have Claude draft or redo merges there without this session.
+5. Write each draft to the `drafts` folder as `<name>.md`, with one extra frontmatter line naming its sources: `sleep_sources: a.md, b.md`. Then run `review`; it prints `Review: <path>`, a page showing each draft beside its sources. Give the user that path. On the served page (`open`) they can tick drafts and apply them, leave a note, have Claude consolidate everything or redo a draft there without this session, and tighten MEMORY.md.
 6. Ask about each draft: approve, change, or skip. To change one, edit the draft and run `review` again. For each approved draft, run `merged --into <name>.md <source.md> ...`. It moves the draft into memory without the `sleep_sources` line, archives the sources, points every link at the merged memory, and commits. Delete nothing yourself; a skipped draft can stay in the drafts folder.
 7. If a hub line now links to the same merged file several times, offer to collapse those links into one, and Edit the hub only if the user agrees.
 8. Finish with: the merges made, how many memories became how many, the commit hashes, and how to undo a merge (`git -C <memDir> revert <hash>`).
 
 ## open
 
-Run `open`. It starts the review page in the background, or reuses one already running, and opens it in the browser. It never prints the page's private address. Tell the user it stops by itself after 2 hours unused, or with `open --stop`. From the page they can apply moves, draft merges with Claude, approve them, and switch projects.
+Run `open`. It starts the review page in the background, or reuses one already running, and opens it in the browser. It never prints the page's private address. Tell the user it stops by itself after 2 hours unused, or with `open --stop`. From the page they can apply moves, have Claude consolidate everything and apply the merges they tick, ask Claude to tighten MEMORY.md, see it all on the 3D map, and switch projects.
 
 ## restore
 
