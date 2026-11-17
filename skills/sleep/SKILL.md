@@ -56,7 +56,7 @@ Pick the flow from the arguments. With none, run **report**, then offer archive 
 
 ## archive
 
-1. Run `archive` (a dry run). It prints `Review: <path>`, a local page with every move, its evidence and every link edit. Give the user that path, and summarize: how many go to the archive, how many to the merge queue, a few example names. To pick moves one by one, offer the served page: run `open`, which starts it in the background (or reuses it), opens it in the browser and stops by itself after 2 hours unused. It has Move and Keep boxes, an Apply button, and a picker for the user's other projects.
+1. Run `archive` (a dry run). It prints `Review: <path>`, a local page with every move, its evidence and every link edit. Give the user that path, and summarize: how many go to the archive, how many to the merge queue, a few example names. To pick moves one by one, offer the served page: run `open`, which starts it in the background (or reuses it), opens it in the browser and stops by itself after 2 hours unused. It has Move and Keep boxes, an Apply button, a picker for the user's other projects, and a 3D map showing the folder before and after the plan.
 2. Ask before running `archive --apply`, unless the user applied from the served page.
 3. After it runs, give the commit hashes from the report, and how to undo: `restore <file>`, or `restore --all` for the whole run.
 
