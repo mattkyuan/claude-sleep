@@ -109,7 +109,7 @@ test("the page asks Claude, shows the checked change from disk, and Apply writes
   assert.match(html, /<code>eval_notes\.md<\/code>, <code>eval_old\.md<\/code> lose MEMORY\.md's protection/);
   const r = await s.act("/index-apply", { ids: ["c1"] });
   assert.equal(r.status, 200, r.body);
-  assert.match(JSON.parse(r.body).message, /Changed 1 line\(s\) in MEMORY\.md\. Undo with: git -C .* revert [0-9a-f]+/);
+  assert.match(JSON.parse(r.body).message, /Changed 1 line\(s\) in MEMORY\.md\. Undo with: sleep undo/);
   assert.ok(!fs.readFileSync(path.join(fx.memDir, "MEMORY.md"), "utf8").includes(OLD));
   assert.match(fs.readFileSync(path.join(fx.memDir, "hub_ops.md"), "utf8"), /- \[Old eval\]\(eval_old\.md\) \[\[eval_notes\]\]\n$/);
   assert.match(execFileSync("git", ["-C", fx.memDir, "log", "-1", "--format=%s"], { encoding: "utf8" }), /tightened MEMORY\.md \(1 change\)/);

@@ -9,6 +9,7 @@ import { DEFAULTS, checks, candidates } from "./lib/checks.mjs";
 import { writeReport } from "./lib/report.mjs";
 import { loadMoves, saveMoves, activeArchived, planMoves, applyMoves, setHint, pruneEmpty, redirectSlugs, linkEdits, hasHint, HINT } from "./lib/archive.mjs";
 import { ensureRepo, commitAll } from "./lib/git.mjs";
+import { loadSteps, saveSteps, snapshot, movesDiff, rewindMoves, nextGroup, inHistory, revertAll, datesOf, movedBy, putDatesBack } from "./lib/undo.mjs";
 import { record, summarize } from "./lib/stats.mjs";
 import { parseSchedule, describe, command, plist, cronLine, install, remove, labelFor } from "./lib/schedule.mjs";
 import { fileURLToPath } from "node:url";
@@ -43,6 +44,8 @@ Usage:
   sleep queue [options]           the consolidation queue, grouped by the hub that links to each memory
   sleep merged --into <file> <queued>...  record a merge: archive the sources, point their links at <file>
   sleep index-apply --changes <file.json> apply checked line changes to MEMORY.md (and its hubs), and commit
+  sleep undo [--list]             take back sleep's last step (one Apply from the page counts as one): its commits in
+                                  the memory folder, and sleep's records of the moves and drafts; --list shows the steps
 
 Options:
   --project DIR      the project whose memory to read (default: the current folder)
@@ -68,7 +71,7 @@ function parse(argv) {
     const a = argv[i];
     if (!a.startsWith("--")) { o.args.push(a); continue; }
     const k = a.slice(2);
-    if (["json", "help", "apply", "all", "off", "open", "serve", "stop", "launched"].includes(k)) o.flags[k] = true;
+    if (["json", "help", "apply", "all", "off", "open", "serve", "stop", "launched", "list"].includes(k)) o.flags[k] = true;
     else { if (i + 1 >= argv.length) throw new Error(`${a} needs a value`); o.flags[k] = argv[++i]; }
   }
   return o;
@@ -254,6 +257,7 @@ async function archive(flags) {
   const purge = only ? [] : purgeList(ctx, purgeDays(flags, ctx.state));
   const r = { ...buildReport(ctx, flags.apply ? "archive" : "archive (dry run)"), applied: !!flags.apply, moves: planned, purged: purge.map((m) => m.to), commits: {} };
   if (flags.apply && (planned.length || purge.length)) {
+    const movesBefore = snapshot(ctx.moves);
     ensureRepo(ctx.memDir);
     r.commits.before = commitAll(ctx.memDir, "sleep: snapshot before archiving");
     applyMoves(ctx.memDir, planned);
@@ -263,7 +267,9 @@ async function archive(flags) {
     setHint(ctx.memDir, ctx.moves.some((m) => m.status === "active"));
     saveMoves(ctx.movesFile, ctx.moves);
     const archived = planned.filter((m) => m.kind === "archive").length, queued = planned.length - archived;
-    r.commits.after = commitAll(ctx.memDir, `sleep: archived ${archived}, queued ${queued} for consolidation${purge.length ? `, purged ${purge.length}` : ""}`);
+    const label = `archived ${archived}, queued ${queued} for consolidation${purge.length ? `, purged ${purge.length}` : ""}`;
+    r.commits.after = commitAll(ctx.memDir, `sleep: ${label}`);
+    addStep(ctx, flags, { commit: r.commits.after, label, movesBefore });
   } else if (flags.apply) {
     // Nothing to move, but a snapshot still records edits made since the last run.
     if (fs.existsSync(path.join(ctx.memDir, ".git"))) r.commits.before = commitAll(ctx.memDir, "sleep: snapshot before archiving");
@@ -284,16 +290,19 @@ async function restore(flags, args) {
   const picked = flags.all ? active : active.filter((x) => x.name === args[0] || x.from === args[0] || x.to === args[0]).slice(0, 1);
   if (!picked.length) throw new Error(flags.all ? "Nothing sleep moved is waiting to be restored." : `Nothing sleep moved matches ${args[0]}. Moved files are listed in ${ctx.movesFile}.`);
   for (const m of picked) if (fs.existsSync(path.join(ctx.memDir, m.from))) throw new Error(`${m.from} exists again, so ${m.to} cannot go back without overwriting it.`);
+  const movesBefore = snapshot(ctx.moves);
   ensureRepo(ctx.memDir);
   commitAll(ctx.memDir, "sleep: snapshot before restoring");
-  applyMoves(ctx.memDir, picked.map((m) => ({ from: m.to, to: m.from })));
+  applyMoves(ctx.memDir, picked.map((m) => ({ from: m.to, to: m.from })), [], { fresh: true });
   const at = new Date().toISOString();
   for (const m of picked) { m.status = "restored"; m.restoredAt = at; }
   setHint(ctx.memDir, ctx.moves.some((x) => x.status === "active"));
   pruneEmpty(ctx.memDir);
   saveMoves(ctx.movesFile, ctx.moves);
   record(ctx, "restore", { restored: picked.map((m) => m.name) });
-  const hash = commitAll(ctx.memDir, picked.length === 1 ? `sleep: restored ${picked[0].from}` : `sleep: restored ${picked.length} files`);
+  const label = picked.length === 1 ? `restored ${picked[0].from}` : `restored ${picked.length} files`;
+  const hash = commitAll(ctx.memDir, `sleep: ${label}`);
+  addStep(ctx, flags, { commit: hash, label, movesBefore });
   if (flags.json) process.stdout.write(JSON.stringify({ restored: picked, commit: hash }, null, 2) + "\n");
   else console.log(picked.length === 1 ? `Restored ${picked[0].to} to ${picked[0].from}.` : `Restored ${picked.length} files.`);
 }
@@ -345,6 +354,9 @@ async function merged(flags, sources) {
     if (want && hashText(fs.readFileSync(path.join(ctx.memDir, m.to), "utf8")) !== want) throw new Error(`${m.name} changed since Claude read it. Redo ${into} first.`);
   }
   const targets = planMoves(ctx.memDir, picked.map((m) => ({ name: m.name, rel: m.to })), []);
+  const movesBefore = snapshot(ctx.moves);
+  // A draft the merge uses up, kept so undo can put it back to apply again.
+  const usedDraft = !fs.existsSync(path.join(ctx.memDir, into)) ? { name: into, text: fs.readFileSync(draft, "utf8"), meta: meta[into] ?? null, note: loadNotes(ctx.state)[into]?.note ?? null } : null;
   ensureRepo(ctx.memDir);
   commitAll(ctx.memDir, "sleep: snapshot before merging", [into]);
   // An approved draft moves into memory without the line that named its sources.
@@ -366,9 +378,11 @@ async function merged(flags, sources) {
   saveMoves(ctx.movesFile, ctx.moves);
   if (meta[into]) { delete meta[into]; saveMeta(ctx.state, meta); }
   record(ctx, "merged", { merged: { into, sources: picked.map((m) => m.name) } });
-  const hash = commitAll(ctx.memDir, `sleep: merged ${picked.length} into ${into}`);
+  const label = `merged ${picked.length} into ${into}`;
+  const hash = commitAll(ctx.memDir, `sleep: ${label}`);
+  addStep(ctx, flags, { commit: hash, label, movesBefore, draft: usedDraft });
   if (flags.json) process.stdout.write(JSON.stringify({ into, sources: targets, commit: hash }, null, 2) + "\n");
-  else console.log(`Merged ${picked.length} into ${into}; the sources are in the archive. Undo with: git -C "${ctx.memDir}" revert ${hash}`);
+  else console.log(`Merged ${picked.length} into ${into} (commit ${hash}); the sources are in the archive. Undo with: sleep undo`);
 }
 
 async function stats(flags) {
@@ -496,6 +510,8 @@ function reviewData(ctx, planned, purge) {
     let now = ""; try { now = fs.readFileSync(path.join(ctx.memDir, INDEX), "utf8"); } catch {}
     r.indexProposal = { ...p, stale: hashText(now) !== p.indexHash };
   }
+  const g = nextGroup(loadSteps(ctx.state));
+  if (g.length) r.undo = { label: g.length === 1 ? g[0].label : `one Apply of ${g.length} commits, the newest ${g[0].label}`, at: g[0].at };
   const batches = planBatches(ctx);
   r.pool = { memories: batches.reduce((a, b) => a + b.files.length, 0), topics: new Set(batches.map((b) => b.topic)).size, batches: batches.length };
   return r;
@@ -669,26 +685,24 @@ async function serveReview(flags) {
       const sources = new Map(drafts.map((d) => [d, sourcesOf(fs.readFileSync(path.join(loc.state, "drafts", d), "utf8"))]));
       job = { kind: "apply", project: loc.key, label: `${moves.length} move(s) and ${drafts.length} merge(s)`, state: "running", started: new Date().toISOString(), message: "", results: [] };
       const mine = job;
+      // Every commit this Apply makes shares one run, so sleep undo takes it all back as one step.
+      const runId = `apply-${Date.now()}`;
       (async () => {
         // A draft's planned sources move with the picked files, so its merge finds them in Consolidate.
         const only = [...new Set([...moves, ...[...sources.values()].flat()])];
         const tmp = path.join(loc.state, `only-${process.pid}.json`);
         fs.mkdirSync(loc.state, { recursive: true });
         fs.writeFileSync(tmp, JSON.stringify(only));
-        let moved, memDir = "";
-        try { const r = await runCli(["archive", "--apply", "--only", tmp, ...pass]); if (r.code !== 0) fail(r); moved = r.out.trim().split("\n")[0]; }
+        let moved;
+        try { const r = await runCli(["archive", "--apply", "--only", tmp, "--run", runId, ...pass]); if (r.code !== 0) fail(r); moved = r.out.trim().split("\n")[0]; }
         finally { fs.rmSync(tmp, { force: true }); }
         for (const d of drafts) {
-          const r = await runCli(["merged", "--into", d, ...sources.get(d), ...pass]);
-          const undo = /git -C "(.+)" revert ([0-9a-f]+)\s*$/.exec(r.out.trim());
-          if (undo) memDir = undo[1];
-          mine.results.push({ draft: d, ok: r.code === 0, reason: r.code === 0 ? "" : (r.err || r.out).trim().split("\n").pop(), commit: r.code === 0 && undo ? undo[2] : null });
+          const r = await runCli(["merged", "--into", d, ...sources.get(d), "--run", runId, ...pass]);
+          const c = /\(commit ([0-9a-f]+)\)/.exec(r.out);
+          mine.results.push({ draft: d, ok: r.code === 0, reason: r.code === 0 ? "" : (r.err || r.out).trim().split("\n").pop(), commit: r.code === 0 && c ? c[1] : null });
         }
         const ok = mine.results.filter((x) => x.ok).length, skipped = mine.results.filter((x) => !x.ok);
-        const commits = mine.results.map((x) => x.commit).filter(Boolean).reverse();
-        // restore --all only half undoes a merge (the merged file and its links stay), so merges undo with git revert.
-        const undo = commits.length ? ` Undo the merges with: git -C "${memDir}" revert --no-edit ${commits.join(" ")} (sleep's move records do not follow a git revert yet).` : moves.length ? " Undo the moves: sleep restore --all." : "";
-        mine.message = `${moved} Merged ${ok} of ${drafts.length}.${skipped.length ? ` Skipped: ${skipped.map((x) => `${x.draft} (${x.reason})`).join("; ")}.` : ""}${undo}`;
+        mine.message = `${moved} Merged ${ok} of ${drafts.length}.${skipped.length ? ` Skipped: ${skipped.map((x) => `${x.draft} (${x.reason})`).join("; ")}.` : ""} Undo all of it with Undo last step, or sleep undo.`;
         mine.state = "done";
       })().catch((e) => Object.assign(mine, { state: "failed", message: String(e?.message || e) }));
       return { message: "Applying." };
@@ -775,6 +789,14 @@ async function serveReview(flags) {
       fs.writeFileSync(tmp, JSON.stringify(picked));
       try { const r = await runCli(["index-apply", "--changes", tmp, ...pass]); if (r.code !== 0) fail(r); return { message: r.out.trim() }; }
       finally { fs.rmSync(tmp, { force: true }); }
+    },
+    // Takes back sleep's last step (one Apply counts as one), through the command line.
+    async "/undo"(body) {
+      if (job?.state === "running") throw new Error("Something is running. Undo once it finishes.");
+      const { pass } = pick(body?.project);
+      const r = await runCli(["undo", ...pass]);
+      if (r.code !== 0) fail(r);
+      return { message: r.out.trim().split("\n")[0] };
     },
     async "/stop-job"() {
       if (job?.state !== "running") return { message: "Nothing is running." };
@@ -913,10 +935,65 @@ async function indexApply(flags) {
   fs.writeFileSync(file, next.indexText);
   for (const [hub, text] of next.hubTexts) fs.writeFileSync(path.join(ctx.memDir, hub), text);
   record(ctx, "index", { index: { changes: ok.length } });
-  const hash = commitAll(ctx.memDir, `sleep: tightened MEMORY.md (${ok.length} change${ok.length === 1 ? "" : "s"})`);
+  const label = `tightened MEMORY.md (${ok.length} change${ok.length === 1 ? "" : "s"})`;
+  const hash = commitAll(ctx.memDir, `sleep: ${label}`);
+  addStep(ctx, flags, { commit: hash, label, movesBefore: snapshot(ctx.moves) });
   const p = loadProposal(ctx.state);
   if (p) fs.rmSync(proposalFile(ctx.state), { force: true });
-  console.log(`Changed ${ok.length} line(s) in MEMORY.md. Undo with: git -C "${ctx.memDir}" revert ${hash}`);
+  console.log(`Changed ${ok.length} line(s) in MEMORY.md. Undo with: sleep undo`);
+}
+
+// One entry in undo.json per commit a step makes. --run groups the commits of one Apply from the page.
+function addStep(ctx, flags, { commit, label, movesBefore, draft = null }) {
+  if (!commit) return;
+  const steps = loadSteps(ctx.state);
+  steps.push({ commit, label, run: String(flags.run || `${Date.now()}-${process.pid}`), at: new Date().toISOString(), moves: movesDiff(movesBefore, ctx.moves), ...(draft ? { draft } : {}) });
+  saveSteps(ctx.state, steps);
+}
+
+// sleep undo: reverts the newest run's commits in one commit, then puts moves.json and any used-up draft back.
+function undo(flags) {
+  const { memDir, state } = locate(flags);
+  const steps = loadSteps(state);
+  if (flags.list) {
+    const open = steps.filter((s) => !s.undone).reverse();
+    if (flags.json) { process.stdout.write(JSON.stringify(open, null, 2) + "\n"); return; }
+    if (!open.length) { console.log("Nothing sleep did is left to undo."); return; }
+    console.log("Newest first; sleep undo takes back the first group:");
+    let last = null;
+    for (const s of open) { console.log(`${s.run === last ? "  " : ""}${s.at.slice(0, 16).replace("T", " ")}  ${s.commit}  ${s.label}`); last = s.run; }
+    return;
+  }
+  const group = nextGroup(steps);
+  if (!group.length) throw new Error("Nothing sleep did is left to undo.");
+  for (const s of group) if (!inHistory(memDir, s.commit)) throw new Error(`Nothing was undone: ${s.commit} (${s.label}) is no longer in the memory folder's history.`);
+  ensureRepo(memDir);
+  commitAll(memDir, "sleep: snapshot before undoing");
+  // git writes reverted files afresh, which would make each one look new and keep it from moving for weeks.
+  const dates = datesOf(memDir);
+  const movesFile = path.join(state, "moves.json");
+  let moves = loadMoves(movesFile);
+  revertAll(memDir, group.map((s) => s.commit));
+  putDatesBack(memDir, dates, movedBy(moves.slice(group.at(-1).moves.len)));
+  for (const s of group) moves = rewindMoves(moves, s.moves);
+  saveMoves(movesFile, moves);
+  for (const s of group) {
+    if (!s.draft || !DRAFT_NAME.test(s.draft.name)) continue;
+    fs.mkdirSync(path.join(state, "drafts"), { recursive: true });
+    fs.writeFileSync(path.join(state, "drafts", s.draft.name), s.draft.text);
+    if (s.draft.meta) { const meta = loadMeta(state); meta[s.draft.name] = s.draft.meta; saveMeta(state, meta); }
+    if (s.draft.note) saveNote(state, s.draft.name, s.draft.note);
+  }
+  pruneEmpty(memDir);
+  // A long Apply is summed up: its merges counted, any other step named.
+  const merges = group.filter((s) => s.label.startsWith("merged ")).length, others = group.filter((s) => !s.label.startsWith("merged ")).map((s) => s.label).reverse();
+  const label = group.length === 1 ? group[0].label : `${group.length} steps: ${[...others, merges ? `${merges} merge${merges === 1 ? "" : "s"}` : ""].filter(Boolean).join("; ")}`;
+  const hash = commitAll(memDir, `sleep: undid ${label}`);
+  const at = new Date().toISOString();
+  for (const s of group) Object.assign(s, { undone: at, undoneBy: hash });
+  saveSteps(state, steps);
+  if (flags.json) process.stdout.write(JSON.stringify({ undid: group.map((s) => s.label), commit: hash }, null, 2) + "\n");
+  else console.log(`Undid: ${label}. Commit ${hash}.`);
 }
 
 async function main() {
@@ -932,6 +1009,7 @@ async function main() {
   if (cmd === "schedule") return schedule(flags);
   if (cmd === "merged") return merged(flags, args);
   if (cmd === "index-apply") return indexApply(flags);
+  if (cmd === "undo") return undo(flags);
   if (cmd === "projects") return projects(flags);
   if (cmd === "open") return openPage(flags);
   throw new Error(`Unknown command: ${cmd}. Try: sleep help`);

@@ -25,6 +25,10 @@ function setup() {
   const exists = (rel) => fs.existsSync(path.join(fx.memDir, rel));
   return { fx, flags, env, exists };
 }
+async function page({ req, token }) {
+  const cookie = (await req("GET", `/?token=${token}`)).headers["set-cookie"][0].split(";")[0];
+  return (await req("GET", "/", { headers: { Cookie: cookie } })).body;
+}
 async function finish(act) {
   for (let i = 0; i < 200; i++) {
     const j = JSON.parse((await act("/job", {})).body).job;
@@ -48,7 +52,7 @@ test("Claude can consolidate files the plan would move, before anything moves, a
 
 test("Apply moves the picked files, then merges each picked draft, in one job", async (t) => {
   const { fx, flags, env, exists } = setup();
-  const { act } = await serve(t, flags, fx, env);
+  const s = await serve(t, flags, fx, env), { act } = s;
   await act("/draft", { topic: "hub_tests.md" });
   await finish(act);
   const r = await act("/apply-all", { moves: ["beta.md"], drafts: ["merged_rules.md"] });
@@ -62,7 +66,17 @@ test("Apply moves the picked files, then merges each picked draft, in one job", 
   assert.deepEqual(job.results.map((x) => [x.draft, x.ok]), [["merged_rules.md", true]]);
   const head = execFileSync("git", ["-C", fx.memDir, "rev-parse", "--short", "HEAD"], { encoding: "utf8" }).trim();
   assert.equal(job.results[0].commit, head, "each merge keeps its own commit");
-  assert.ok(job.message.includes(`revert --no-edit ${head} (`), job.message);
+  assert.match(job.message, /Undo all of it/);
+  // The page offers Undo last step, and it takes back the whole Apply: the move and the merge, files and records.
+  const html = await page(s);
+  assert.match(html, /data-undo data-undo-label="one Apply of 2 commits, the newest merged 2 into merged_rules\.md"/);
+  const u = await act("/undo", {});
+  assert.equal(u.status, 200, u.body);
+  assert.ok(exists("beta.md") && exists("theta.md") && !exists("consolidate") && !exists("memory-archive") && !exists("merged_rules.md"), "folder as before the Apply");
+  assert.ok(fs.existsSync(path.join(fx.state, "drafts", "merged_rules.md")), "the draft is back to apply again");
+  const moves = JSON.parse(fs.readFileSync(path.join(fx.state, "moves.json"), "utf8"));
+  assert.deepEqual(moves, []);
+  assert.doesNotMatch(await page(s), /data-undo /, "nothing left to undo");
 });
 
 test("a source counts as unchanged when an earlier merge in the same Apply redirected its [[slug]] links", async (t) => {

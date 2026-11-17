@@ -28,6 +28,7 @@ Then run `/sleep` in any project. Requires Node 18 or later and git.
 | `/sleep archive` | Shows the moves, then moves them once you agree |
 | `/sleep consolidate` | Merges queued lessons one topic at a time; you approve each merged memory |
 | `/sleep restore <file>` | Puts a moved file back |
+| `/sleep undo` | Takes back sleep's last step |
 | `/sleep schedule` | Runs sleep on its own, weekly by default and report only |
 | `/sleep stats` | How well sleep is doing over time |
 
@@ -37,7 +38,9 @@ On the served page (`sleep open`), **Consolidate everything** runs `claude -p` w
 
 The server checks every draft before writing it: a safe name, at least 2 sources from the batch, and a count of the PR and issue numbers, dates, versions and paths its sources hold that it kept. The result shows memories and size before and after, then one row per topic to tick. A draft starts unticked when it dropped one of those facts, or when a source changed since Claude read it. Nothing changes until Apply: it moves the ticked files, then merges each ticked draft, and commits.
 
-**Tighten MEMORY.md** asks Claude for line changes to the index: move a closed topic's line to a hub MEMORY.md links, or shorten a line. The server refuses a change unless the old line is in MEMORY.md exactly, every file MEMORY.md links stays reachable from it or a hub it links, it adds no em dash, and the index stays within 200 lines and 25 KB. The page says which files lose the index's protection from archiving. Apply runs `index-apply`, one commit, undone with `git revert`.
+**Tighten MEMORY.md** asks Claude for line changes to the index: move a closed topic's line to a hub MEMORY.md links, or shorten a line. The server refuses a change unless the old line is in MEMORY.md exactly, every file MEMORY.md links stays reachable from it or a hub it links, it adds no em dash, and the index stays within 200 lines and 25 KB. The page says which files lose the index's protection from archiving. Apply runs `index-apply`, one commit.
+
+**Undo last step** on the page, or `sleep undo`, takes back the last thing sleep did; one Apply counts as one step, moves and merges together. It reverts those commits in the memory folder and puts sleep's own records back (the moves list, and a draft a merge used up, ready to apply again), so a later run sees the folder as it was. If you edited the same lines since, it refuses and changes nothing.
 
 ## Run the command line directly
 
@@ -57,7 +60,8 @@ node sleep.mjs archive --apply --project ~/code/my-project
 |---|---|
 | `report` | Inventory, usage, checks, and what could move. Changes nothing. |
 | `archive` | Shows what would move. With `--apply`, moves it. |
-| `restore <file>` | Puts a moved file back where it was, links and all. `--all` undoes every move. |
+| `restore <file>` | Puts a moved file back where it was, links and all. `--all` restores every moved file; to take back a merge, use `undo`. |
+| `undo [--list]` | Takes back sleep's last step (one Apply from the page is one step): reverts its commits and puts the moves list and any used-up draft back. `--list` shows the steps, newest first. |
 | `queue` | What is in Consolidate, grouped by the hub that links to each memory |
 | `merged --into <file> <queued>...` | Records a merge the skill wrote: archives the sources and points their links at the merged file |
 | `index-apply --changes <file.json>` | Applies line changes to MEMORY.md (and lines added to its hubs) that the served page proposed, after checking them again, in one commit |

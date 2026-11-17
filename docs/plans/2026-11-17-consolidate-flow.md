@@ -30,10 +30,10 @@ One flow on the served page: look, ask Claude to consolidate, see what changed (
 - Claude reads a memory once: `read.json` records what each finished batch read, with a hash, so a memory left unmerged is sent again only after it changes. Without it, every run re-sent every unmerged memory and the start card never cleared.
 - A source's hash leaves out link targets, both `[text](path)` and `[[slug]]`. Merges in the same Apply rewrite slugs in other drafts' sources; before this, 16 of 77 fake merges on a copy of the real folder were skipped as changed.
 - Each merge is its own commit, not one commit for the whole Apply. The page lists every merge commit for `git revert`.
-- Undo gap, found on a scratch copy: `restore --all` after a merge undoes only half of it (the merged file and redirected links stay), and a `git revert` of a merge leaves `moves.json` saying it happened. The page now names `git revert` for merges and `restore --all` for moves only. A `sleep undo` that does both is not built.
+- Undo gap, found on a scratch copy: `restore --all` after a merge undoes only half of it (the merged file and redirected links stay), and a `git revert` of a merge leaves `moves.json` saying it happened. Closed the same day by `sleep undo` and the page's Undo last step: one Apply is one step, reverted in one commit, with `moves.json` and the used-up drafts put back (`<state>/undo.json` records each step).
 - Not built: the start card's time estimate (no measured rate yet), and highlighting fact tokens inside drafts (the badge lists them instead).
 - Apply cannot be stopped; Stop applies to Claude jobs only.
 
 ## Not in this plan
 
-A local-model drafter (parked by Matt, 2026-11-17). Undo for an applied run is `sleep restore --all` for moves and `git revert` for merges and index edits; the page shows the commands after applying.
+A local-model drafter (parked by Matt, 2026-11-17). Undo for an applied run is `sleep undo`.

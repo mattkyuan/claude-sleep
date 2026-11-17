@@ -1,7 +1,7 @@
 ---
 name: sleep
 description: Memory upkeep for Claude Code's auto memory. Shows which memory files the agent actually uses, checks the folder against best practices, archives memories that go unused, and merges unused feedback memories into fewer, sharper ones. Use when the user asks to tidy, clean up, audit, consolidate or "sleep" their memory, or asks which memories are used.
-argument-hint: "[report | open | archive | consolidate [topic] | restore <file> | schedule | stats]"
+argument-hint: "[report | open | archive | consolidate [topic] | restore <file> | undo | schedule | stats]"
 allowed-tools:
   - Bash(node "${CLAUDE_PLUGIN_ROOT}/sleep.mjs" *)
   - Read
@@ -27,7 +27,7 @@ Pick the flow from the arguments. With none, run **report**, then offer archive 
 ## Hard rules
 
 - Never move, rename or delete a memory file yourself (no `mv`, `rm`, `git`). Only the command line moves files, so every move is recorded, committed and reversible.
-- Ask before every change: `archive --apply`, each merge, `restore`. Use AskUserQuestion.
+- Ask before every change: `archive --apply`, each merge, `restore`, `undo`. Use AskUserQuestion.
 - Memory is the user's private data. Don't send it anywhere. In chat, show excerpts and proposed text, not whole folders.
 - If the command line reports an error, tell the user what it said. Don't work around it.
 - Write is for merge drafts in the drafts folder (**consolidate**), and nothing else. Never write or edit inside the memory folder, except collapsing hub links in **consolidate** step 7 after the user agrees; the command line moves an approved draft in. Don't fix failing checks, frontmatter or descriptions yourself; list them for the user, who can ask for a fix separately.
@@ -58,7 +58,7 @@ Pick the flow from the arguments. With none, run **report**, then offer archive 
 
 1. Run `archive` (a dry run). It prints `Review: <path>`, a local page with every move, its evidence and every link edit. Give the user that path, and summarize: how many go to Archive, how many to Consolidate, a few example names. To pick moves one by one, offer the served page: run `open`, which starts it in the background (or reuses it), opens it in the browser and stops by itself after 2 hours unused. It has Move and Keep boxes, an Apply button, a picker for the user's other projects, and a 3D map showing the folder before and after the plan.
 2. Ask before running `archive --apply`, unless the user applied from the served page.
-3. After it runs, give the commit hashes from the report, and how to undo: `restore <file>`, or `restore --all` for the whole run.
+3. After it runs, give the commit hashes from the report, and how to undo: `undo` for the whole run, or `restore <file>` for one file.
 
 ## consolidate
 
@@ -71,7 +71,7 @@ Merging is the one place where you write memory. Work on one topic per run unles
 5. Write each draft to the `drafts` folder as `<name>.md`, with one extra frontmatter line naming its sources: `sleep_sources: a.md, b.md`. Then run `review`; it prints `Review: <path>`, a page showing each draft beside its sources. Give the user that path. On the served page (`open`) they can tick drafts and apply them, leave a note, have Claude consolidate everything or redo a draft there without this session, and tighten MEMORY.md.
 6. Ask about each draft: approve, change, or skip. To change one, edit the draft and run `review` again. For each approved draft, run `merged --into <name>.md <source.md> ...`. It moves the draft into memory without the `sleep_sources` line, archives the sources, points every link at the merged memory, and commits. Delete nothing yourself; a skipped draft can stay in the drafts folder.
 7. If a hub line now links to the same merged file several times, offer to collapse those links into one, and Edit the hub only if the user agrees.
-8. Finish with: the merges made, how many memories became how many, the commit hashes, and how to undo a merge (`git -C <memDir> revert <hash>`).
+8. Finish with: the merges made, how many memories became how many, the commit hashes, and how to undo: `undo` takes back the newest merge, one per run.
 
 ## open
 
@@ -79,7 +79,7 @@ Run `open`. It starts the review page in the background, or reuses one already r
 
 ## restore
 
-Confirm with the user, then run `restore <file>`, or `restore --all` to undo every move still in place.
+Confirm with the user, then run `restore <file>` for one moved file. To take back a whole step, a merge included, run `undo --list` to show it, confirm, then `undo`.
 
 ## schedule
 

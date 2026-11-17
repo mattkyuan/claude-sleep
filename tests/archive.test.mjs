@@ -189,3 +189,16 @@ test("applyMoves itself refuses a path outside the memory folder", () => {
   assert.throws(() => applyMoves(fx.memDir, [], [{ from: "beta.md", to: "/tmp/x.md" }]), /Refusing/);
   assert.ok(fs.existsSync(path.join(fx.memDir, "beta.md")));
 });
+
+test("a moved file keeps its creation date; a restored one starts a new window", () => {
+  const { fx, archive } = setup();
+  const created = (r, name) => r.files.find((f) => f.name === name).created;
+  const start = fx.report(["--days", "60"]);
+  const moved = archive(["--apply"]).moves;
+  const after = fx.report(["--days", "60"]);
+  for (const m of moved) assert.equal(created(after, m.name), created(start, m.name), `${m.name} kept its date`);
+  const r = fx.run(["restore", moved[0].from, "--project", fx.project, "--state", fx.state]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(created(fx.report(["--days", "60"]), moved[0].name), new Date().toISOString().slice(0, 10), "restored counts as new");
+  assert.ok(!archive([]).moves.some((m) => m.name === moved[0].name), "so it does not move again at once");
+});
