@@ -1,6 +1,12 @@
 # claude-sleep
 
-Memory upkeep for Claude Code. It shows which memory files the agent actually uses, checks the folder against [best practices](docs/best-practices.md), and moves what goes unused out of the way: project memories to an archive, feedback memories to a queue where they can be merged. Every run writes a report, and every change is a git commit you can undo.
+Memory upkeep for Claude Code. It shows which memory files the agent actually uses, checks the folder against [best practices](docs/best-practices.md), and moves what goes unused out of the way. Every run writes a report, and every change is a git commit you can undo.
+
+Every memory file is in one of three places:
+
+- **Keep:** memory Claude reads as usual.
+- **Consolidate:** unused feedback, still searchable, waiting to be merged into fewer, sharper memories.
+- **Archive:** retained, but not typically accessed. Unused project memories go here, and any file can be restored.
 
 Early: the command line, the `/sleep` skill and scheduling work.
 
@@ -44,11 +50,11 @@ node sleep.mjs archive --apply --project ~/code/my-project
 | `report` | Inventory, usage, checks, and what could move. Changes nothing. |
 | `archive` | Shows what would move. With `--apply`, moves it. |
 | `restore <file>` | Puts a moved file back where it was, links and all. `--all` undoes every move. |
-| `queue` | The consolidation queue, grouped by the hub that links to each memory |
+| `queue` | What is in Consolidate, grouped by the hub that links to each memory |
 | `merged --into <file> <queued>...` | Records a merge the skill wrote: archives the sources and points their links at the merged file |
 | `review --serve [--port N]` | The same page on 127.0.0.1, where you decide: tick or untick each move, Move all or Keep all per hub, Apply; approve a merge draft, or leave Claude a note to redo it. A picker at the top switches to any other project with memory. The address carries a private key; every action is checked against sleep's own plan and runs the command line, so it is committed and can be undone. |
 | `open [--stop]` | Start the served page in the background, or reuse it, and open it in your browser. It stops by itself after 2 hours unused. From the page, Draft with Claude runs `claude -p` with no tools on one queued topic (up to 10 memories) and writes the drafts it returns after checking them; nothing merges until you approve. It runs on your Claude plan. |
-| 3D map | On the served page, **3D map** draws every memory file on its floor (MEMORY.md, memory, merge queue, archive) with its links. **Before** shows the folder now; **After** shows it once the plan and the merge drafts are applied, and the files move between floors. Read only. |
+| 3D map | On the served page, **3D map** draws every memory file on its floor (MEMORY.md, Keep, Consolidate, Archive) with its links. **Before** shows the folder now; **After** shows it once the plan and the merge drafts are applied, and the files move between floors. Read only. |
 | `projects [--json]` | Every project with memory, with its folder and file count. Memory is per project, so this is the way to find the others. |
 | `review [--open]` | A local page with every proposed move, its evidence, each link edit as before and after, and merge drafts beside their sources. Changes nothing. An `archive` dry run writes one too. |
 | `stats` | Memory size over time, and sleep's error rate: files restored after archiving, or read again from the archive |
@@ -73,7 +79,7 @@ node sleep.mjs archive --apply --project ~/code/my-project
 | `user`, anything MEMORY.md links to | Never moves | |
 
 - Links to a moved file are rewritten, not deleted, so a line that lists several memories keeps its context.
-- One line in MEMORY.md tells the agent to look in the archive and the queue only after the main files turn up nothing.
+- One line in MEMORY.md tells the agent to look in Archive and Consolidate only after the main files turn up nothing.
 - Before changing anything, sleep commits the memory folder to its own git history, then commits again after.
 
 ## Schedule it

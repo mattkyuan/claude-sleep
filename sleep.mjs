@@ -270,7 +270,7 @@ async function archive(flags) {
   const reviewFile = flags.apply ? null : writeReview(ctx, planned, purge);
   const verb = flags.apply ? "Moved" : "Would move";
   if (reviewFile && !flags.json) console.log(`Review: ${reviewFile}`);
-  finish(r, ctx, flags, `${verb} ${planned.length} file(s) (${planned.filter((m) => m.kind === "archive").length} to the archive, ${planned.filter((m) => m.kind === "consolidate").length} to consolidate)${purge.length ? `; ${flags.apply ? "purged" : "would purge"} ${purge.length}` : ""}.${flags.apply ? "" : " Run with --apply to do it."}`);
+  finish(r, ctx, flags, `${verb} ${planned.length} file(s) (${planned.filter((m) => m.kind === "archive").length} to Archive, ${planned.filter((m) => m.kind === "consolidate").length} to Consolidate)${purge.length ? `; ${flags.apply ? "purged" : "would purge"} ${purge.length}` : ""}.${flags.apply ? "" : " Run with --apply to do it."}`);
 }
 
 // Puts moved files back and points their links at them again. A link that was already broken before the move
@@ -580,13 +580,13 @@ async function serveReview(flags) {
         const d = draftNamed(loc, body.redo);
         const text = fs.readFileSync(path.join(loc.state, "drafts", d), "utf8");
         const sources = sourcesOf(text);
-        if (!sources.length || sources.some((x) => !queued.has(x))) throw new Error(`${d} names a source that is not in the merge queue.`);
+        if (!sources.length || sources.some((x) => !queued.has(x))) throw new Error(`${d} names a source that is not in Consolidate.`);
         batch = sources.map(read);
         redo = { name: d, text, note: loadNotes(loc.state)[d]?.note || "" };
         label = `redo of ${d}`;
       } else {
         const t = queueTopics(ctx).list.find((x) => x.topic === body?.topic);
-        if (!t) throw new Error("That topic is not in the merge queue.");
+        if (!t) throw new Error("That topic is not in Consolidate.");
         batch = t.files.slice(0, MAX_BATCH).map((x) => read(x.name));
         const h = t.topic !== "unfiled" && ctx.live.files.find((x) => x.name === t.topic && x.area === "main");
         if (h) hub = { name: h.name, text: fs.readFileSync(path.join(ctx.memDir, h.rel), "utf8") };

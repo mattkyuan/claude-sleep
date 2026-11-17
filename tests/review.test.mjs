@@ -78,5 +78,5 @@ test("a draft whose sources are not all queued is flagged on the page", () => {
   fs.mkdirSync(path.join(fx.state, "drafts"), { recursive: true });
   fs.writeFileSync(path.join(fx.state, "drafts", "odd.md"), `---\nname: odd\ndescription: Odd\nsleep_sources: zeta.md, alpha.md\nmetadata:\n  type: feedback\n---\n\n${ZETA}\n`);
   const html = fs.readFileSync(pagePath(ok(["review"]).stdout), "utf8");
-  assert.match(html, /alpha\.md[\s\S]{0,300}not in the merge queue/);
+  assert.match(html, /alpha\.md[\s\S]{0,300}not in Consolidate/);
 });

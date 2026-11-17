@@ -47,16 +47,16 @@ Pick the flow from the arguments. With none, run **report**, then offer archive 
    | Used / unused / unknown | |
    | Checks needing attention | names |
    | Archive candidates | |
-   | Waiting to be queued for merging | |
-   | Already in the merge queue | count of files in `consolidate/` |
+   | Would move to Consolidate | |
+   | Already in Consolidate | count of files in `consolidate/` |
 
 3. If usage history is shorter than the window, say nothing will move until it covers the window, and when that will be.
 4. For each failing check, give a one-line fix as a suggestion. The reasoning behind each check is in `${CLAUDE_PLUGIN_ROOT}/docs/best-practices.md`; read it only if the user asks why.
-5. Offer only what can run now. Merging works on files already in the merge queue (`consolidate/`); if it is empty, `archive --apply` has to run first, so offer archive, not consolidate.
+5. Offer only what can run now. Merging works on files already in Consolidate (`consolidate/`); if it is empty, `archive --apply` has to run first, so offer archive, not consolidate.
 
 ## archive
 
-1. Run `archive` (a dry run). It prints `Review: <path>`, a local page with every move, its evidence and every link edit. Give the user that path, and summarize: how many go to the archive, how many to the merge queue, a few example names. To pick moves one by one, offer the served page: run `open`, which starts it in the background (or reuses it), opens it in the browser and stops by itself after 2 hours unused. It has Move and Keep boxes, an Apply button, a picker for the user's other projects, and a 3D map showing the folder before and after the plan.
+1. Run `archive` (a dry run). It prints `Review: <path>`, a local page with every move, its evidence and every link edit. Give the user that path, and summarize: how many go to Archive, how many to Consolidate, a few example names. To pick moves one by one, offer the served page: run `open`, which starts it in the background (or reuses it), opens it in the browser and stops by itself after 2 hours unused. It has Move and Keep boxes, an Apply button, a picker for the user's other projects, and a 3D map showing the folder before and after the plan.
 2. Ask before running `archive --apply`, unless the user applied from the served page.
 3. After it runs, give the commit hashes from the report, and how to undo: `restore <file>`, or `restore --all` for the whole run.
 
@@ -66,7 +66,7 @@ Merging is the one place where you write memory. Work on one topic per run unles
 
 1. Run `queue --json`. It returns `memDir`, the `drafts` folder, `notes` (what the user asked you to change in a draft, left on the review page), and the queued memories grouped by the file that links to them (usually a hub). If `notes` has entries, redo those drafts first: read the note, rewrite the draft in the drafts folder to follow it, and say what changed. Otherwise show the topics with their counts, and ask which one to merge, largest first. With more than about 12 files in a topic, take them in batches of about 10.
 2. Read every memory in the batch (`<memDir>/<rel>`) and the hub that links to them.
-3. Group the memories that state the same rule or lesson. Draft one merged memory per group, not one per topic. A memory that fits no group stays queued; don't force it.
+3. Group the memories that state the same rule or lesson. Draft one merged memory per group, not one per topic. A memory that fits no group stays in Consolidate; don't force it.
 4. Write each merged memory by the rules in `${CLAUDE_PLUGIN_ROOT}/docs/merge-rules.md` (read it first). The served page's Draft with Claude button follows the same file.
 5. Write each draft to the `drafts` folder as `<name>.md`, with one extra frontmatter line naming its sources: `sleep_sources: a.md, b.md`. Then run `review`; it prints `Review: <path>`, a page showing each draft beside its sources. Give the user that path. On the served page (`open`) they can approve a merge, leave a note, or have Claude draft or redo merges there without this session.
 6. Ask about each draft: approve, change, or skip. To change one, edit the draft and run `review` again. For each approved draft, run `merged --into <name>.md <source.md> ...`. It moves the draft into memory without the `sleep_sources` line, archives the sources, points every link at the merged memory, and commits. Delete nothing yourself; a skipped draft can stay in the drafts folder.
