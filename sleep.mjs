@@ -16,6 +16,7 @@ import { frontmatter } from "./lib/memory.mjs";
 import { reviewHtml } from "./lib/review.mjs";
 import { startServer } from "./lib/serve.mjs";
 import { spawn } from "node:child_process";
+import { DRAFT_NAME, MAX_BATCH, sourcesOf, systemPrompt, buildInput, parseDrafts, checkDrafts } from "./lib/draft.mjs";
 
 const CLI = fileURLToPath(import.meta.url);
 const loadConfig = (state) => { try { const c = JSON.parse(fs.readFileSync(path.join(state, "config.json"), "utf8")); return c && typeof c === "object" ? c : {}; } catch { return {}; } };
@@ -33,6 +34,8 @@ Usage:
   sleep review --serve [--port N] the same page on 127.0.0.1, where you pick moves, approve merges and leave notes,
                                   for any project with memory (pick it at the top of the page)
   sleep projects [--json]         every project with memory, and how many files each has
+  sleep open [--stop]             start the served page in the background (or reuse it) and open it in your browser;
+                                  it stops by itself after 2 hours unused
   sleep stats [options]           how well sleep is doing: size over time, restores and re-reads (its error rate), merges
   sleep queue [options]           the consolidation queue, grouped by the hub that links to each memory
   sleep merged --into <file> <queued>...  record a merge: archive the sources, point their links at <file>
@@ -61,7 +64,7 @@ function parse(argv) {
     const a = argv[i];
     if (!a.startsWith("--")) { o.args.push(a); continue; }
     const k = a.slice(2);
-    if (["json", "help", "apply", "all", "off", "open", "serve"].includes(k)) o.flags[k] = true;
+    if (["json", "help", "apply", "all", "off", "open", "serve", "stop", "launched"].includes(k)) o.flags[k] = true;
     else { if (i + 1 >= argv.length) throw new Error(`${a} needs a value`); o.flags[k] = argv[++i]; }
   }
   return o;
@@ -293,8 +296,8 @@ async function restore(flags, args) {
 
 // The consolidation queue, grouped by the file that links to each memory (a hub, usually), so related lessons can be
 // merged together. A memory nothing in the main folder links to is "unfiled".
-async function queue(flags) {
-  const ctx = await context(flags);
+// The consolidation queue grouped by the main file that links to each memory (usually a hub), largest first.
+function queueTopics(ctx) {
   const queued = ctx.live.files.filter((f) => f.area === "consolidate");
   const mainNames = new Set(ctx.live.files.filter((f) => f.area === "main").map((f) => f.name));
   const topics = new Map();
@@ -305,6 +308,12 @@ async function queue(flags) {
   }
   const list = [...topics].map(([topic, files]) => ({ topic, files: files.sort((a, b) => a.name.localeCompare(b.name)) }))
     .sort((a, b) => (a.topic === "unfiled") - (b.topic === "unfiled") || b.files.length - a.files.length);
+  return { queued, list };
+}
+
+async function queue(flags) {
+  const ctx = await context(flags);
+  const { queued, list } = queueTopics(ctx);
   if (flags.json) { process.stdout.write(JSON.stringify({ memDir: ctx.memDir, drafts: path.join(ctx.state, "drafts"), notes: openNotes(ctx.state), queued: queued.length, topics: list }, null, 2) + "\n"); return; }
   console.log(`${queued.length} memories waiting to be merged, in ${list.length} topic(s):`);
   for (const t of list) console.log(`  ${t.topic}: ${t.files.length}`);
@@ -396,7 +405,6 @@ async function schedule(flags) {
 
 // Merge drafts the skill wrote to <state>/drafts, each naming its sources in a sleep_sources: line.
 const SOURCES_LINE = /^sleep_sources:.*\n/m;
-const DRAFT_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*\.md$/;
 // Notes for Claude about drafts, left on the review page. The skill reads them through queue --json.
 const notesFile = (state) => path.join(state, "notes.json");
 const loadNotes = (state) => { try { const v = JSON.parse(fs.readFileSync(notesFile(state), "utf8")); return v && typeof v === "object" && !Array.isArray(v) ? v : {}; } catch { return {}; } };
@@ -443,6 +451,7 @@ function reviewData(ctx, planned, purge) {
     hint: { add: planned.length > 0 && !hasHint(ctx.memDir), present: hasHint(ctx.memDir), line: HINT },
     drafts: readDrafts(ctx),
     queued: ctx.live.files.filter((f) => f.area === "consolidate").length,
+    topics: queueTopics(ctx).list.map((t) => ({ topic: t.topic, count: t.files.length })),
   };
   return r;
 }
@@ -495,6 +504,33 @@ async function serveReview(flags) {
     return list.some((p) => p.key === launch.key) ? list : [{ key: launch.key, path: launch.project, files: 0 }, ...list];
   };
   const fail = (r) => { throw new Error((r.err || r.out).trim().split("\n").pop() || "The command failed."); };
+  let lastUsed = Date.now();
+  // One Claude drafting job at a time, across projects. The child is killed if the server stops.
+  let job = null, child = null;
+  process.on("exit", () => { try { child?.kill(); } catch {} });
+  const RULES = fs.readFileSync(path.join(path.dirname(CLI), "docs", "merge-rules.md"), "utf8");
+  const runClaude = (input) => new Promise((resolve) => {
+    // No tools, no MCP servers or connectors, no slash commands, nothing saved, in an empty folder outside the
+    // project, and the memory text on stdin rather than in the arguments (other processes can read arguments).
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "sleep-draft-"));
+    const args = ["-p", "--tools", "", "--strict-mcp-config", "--disable-slash-commands", "--no-session-persistence", "--output-format", "json", "--system-prompt", systemPrompt(RULES)];
+    child = spawn(process.env.SLEEP_CLAUDE || "claude", args, { cwd, stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, ENABLE_CLAUDEAI_MCP_SERVERS: "false" } });
+    let out = "", err = "";
+    const timer = setTimeout(() => child?.kill(), 15 * 60_000);
+    child.stdout.on("data", (c) => (out += c));
+    child.stderr.on("data", (c) => (err += c));
+    child.on("error", (e) => (err += e.message));
+    child.on("close", (code) => { clearTimeout(timer); child = null; fs.rmSync(cwd, { recursive: true, force: true }); resolve({ code, out, err }); });
+    child.stdin.on("error", () => {});
+    child.stdin.end(input);
+  });
+  const answerOf = (r) => {
+    if (r.code !== 0) throw new Error((r.err || r.out).trim().split("\n").pop() || `claude exited with ${r.code}.`);
+    let j; try { j = JSON.parse(r.out); } catch { throw new Error("claude did not answer in JSON."); }
+    if (j.is_error) throw new Error(String(j.result || "claude reported an error."));
+    return String(j.result || "");
+  };
+  const used = (fn) => async (...a) => { lastUsed = Date.now(); try { return await fn(...a); } finally { lastUsed = Date.now(); } };
   const draftNamed = (loc, v) => { const d = String(v || ""); if (!DRAFT_NAME.test(d) || !fs.existsSync(path.join(loc.state, "drafts", d))) throw new Error("No such draft."); return d; };
   const actions = {
     async "/apply"(body) {
@@ -512,6 +548,7 @@ async function serveReview(flags) {
     },
     async "/merge"(body) {
       const { loc, pass } = pick(body?.project);
+      if (job?.state === "running" && job.project === loc.key) throw new Error("Claude is drafting for this project. Merge once it finishes.");
       const d = draftNamed(loc, body?.draft);
       if (fs.existsSync(path.join(loc.memDir, d))) throw new Error(`A memory named ${d} already exists. Rename the draft first.`);
       const { fm } = frontmatter(fs.readFileSync(path.join(loc.state, "drafts", d), "utf8"));
@@ -529,7 +566,47 @@ async function serveReview(flags) {
       saveNote(loc.state, d, note);
       return { message: note ? "Note saved." : "Note cleared." };
     },
+    // Starts Claude on one topic of the queue, or on one draft with your note. Returns at once; poll /job.
+    async "/draft"(body) {
+      if (job?.state === "running") throw new Error("Claude is already drafting. Wait for it to finish.");
+      const { loc, flags: f } = pick(body?.project);
+      const ctx = await context(f);
+      const queued = new Map(queueTopics(ctx).queued.map((x) => [x.name, x]));
+      const read = (name) => ({ name, text: fs.readFileSync(path.join(ctx.memDir, queued.get(name).rel), "utf8") });
+      let batch, hub = null, redo = null, label;
+      if (body?.redo != null) {
+        const d = draftNamed(loc, body.redo);
+        const text = fs.readFileSync(path.join(loc.state, "drafts", d), "utf8");
+        const sources = sourcesOf(text);
+        if (!sources.length || sources.some((x) => !queued.has(x))) throw new Error(`${d} names a source that is not in the merge queue.`);
+        batch = sources.map(read);
+        redo = { name: d, text, note: loadNotes(loc.state)[d]?.note || "" };
+        label = `redo of ${d}`;
+      } else {
+        const t = queueTopics(ctx).list.find((x) => x.topic === body?.topic);
+        if (!t) throw new Error("That topic is not in the merge queue.");
+        batch = t.files.slice(0, MAX_BATCH).map((x) => read(x.name));
+        const h = t.topic !== "unfiled" && ctx.live.files.find((x) => x.name === t.topic && x.area === "main");
+        if (h) hub = { name: h.name, text: fs.readFileSync(path.join(ctx.memDir, h.rel), "utf8") };
+        label = `${t.topic} (${batch.length} of ${t.files.length})`;
+      }
+      const draftsDir = path.join(loc.state, "drafts");
+      job = { project: loc.key, label, state: "running", started: new Date().toISOString(), message: "" };
+      const mine = job;
+      runClaude(buildInput({ batch, hub, redo })).then((r) => {
+        const drafts = checkDrafts(parseDrafts(answerOf(r)), { batch: batch.map((x) => x.name), memDir: ctx.memDir, draftsDir, redo: redo?.name });
+        fs.mkdirSync(draftsDir, { recursive: true });
+        for (const d of drafts) fs.writeFileSync(path.join(draftsDir, d.name), d.text);
+        Object.assign(mine, { state: "done", message: `Claude wrote ${drafts.length} draft(s): ${drafts.map((d) => d.name).join(", ")}.` });
+      }).catch((e) => Object.assign(mine, { state: "failed", message: String(e?.message || e) }));
+      return { message: `Claude is drafting: ${label}.` };
+    },
+    async "/job"() { return { job }; },
+    // For sleep open: proves a recorded server is this one (only it knows the key), and stops it.
+    async "/ping"() { return { pid: process.pid }; },
+    async "/stop"() { setTimeout(() => process.exit(0), 50); return { message: "Stopping." }; },
   };
+  for (const k of Object.keys(actions)) actions[k] = used(actions[k]);
   const render = async (nonce, token, url) => {
     const { loc, flags: f } = pick(url.searchParams.get("project"));
     const ctx = await context(f);
@@ -538,10 +615,73 @@ async function serveReview(flags) {
   };
   const port = flags.port != null ? Number(flags.port) : 8767;
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error("--port must be a port number");
-  const { url } = await startServer({ port, render, actions });
+  const { url } = await startServer({ port, render: used(render), actions });
+  if (flags.launched) {
+    // Started by sleep open: leave a record only you can read, and stop by itself once unused for the idle time.
+    const record = serverRecord(launch.claudeDir);
+    fs.mkdirSync(path.dirname(record), { recursive: true });
+    fs.writeFileSync(record, JSON.stringify({ pid: process.pid, port: Number(new URL(url).port), url, project: launch.key }), { mode: 0o600 });
+    fs.chmodSync(record, 0o600);
+    const drop = () => { try { if (JSON.parse(fs.readFileSync(record, "utf8")).pid === process.pid) fs.rmSync(record); } catch {} };
+    process.on("exit", drop);
+    for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(sig, () => process.exit(0));
+    const idle = Number(process.env.SLEEP_IDLE_MS) || IDLE_MS;
+    setInterval(() => { if (job?.state !== "running" && Date.now() - lastUsed > idle) process.exit(0); }, Math.min(Math.max(idle / 4, 100), 60_000));
+    return;
+  }
   console.log(`Review: ${url}`);
   console.log("The address holds a private key: keep it to yourself. Press Ctrl+C to stop.");
   if (flags.open) spawnOpen(url);
+}
+
+const IDLE_MS = 2 * 3600_000;
+const serverRecord = (claudeDir) => path.join(claudeDir, "sleep", "server.json");
+
+// sleep open: the review page without a terminal. Reuses a server that answers with its own key, otherwise starts
+// one in the background and opens it. The keyed address goes only to the browser, never to the output.
+async function openPage(flags) {
+  const claudeDir = claudeDirOf();
+  const record = serverRecord(claudeDir);
+  const read = () => { try { return JSON.parse(fs.readFileSync(record, "utf8")); } catch { return null; } };
+  const call = async (rec, action) => {
+    try {
+      const u = new URL(rec.url);
+      const r = await fetch(`http://127.0.0.1:${u.port}${action}`, { method: "POST", headers: { "Content-Type": "application/json", "X-Sleep-Token": u.searchParams.get("token") }, body: "{}", signal: AbortSignal.timeout(3000) });
+      return r.ok ? await r.json() : null;
+    } catch { return null; }
+  };
+  const live = async (rec) => rec && (await call(rec, "/ping"))?.pid === rec.pid;
+  const show = (rec, how) => {
+    const browser = !process.env.SLEEP_NO_BROWSER;
+    if (browser) spawnOpen(rec.url);
+    console.log(`${how} on port ${rec.port}${browser ? ", opened in your browser" : ""}. It stops by itself after ${IDLE_MS / 3600_000} hours unused, or with: sleep open --stop`);
+  };
+  const rec = read();
+  if (flags.stop) {
+    if (await live(rec)) { await call(rec, "/stop"); console.log("Stopped the review page."); } else console.log("No review page is running.");
+    fs.rmSync(record, { force: true });
+    return;
+  }
+  if (await live(rec)) return show(rec, "The review page is already running");
+  fs.rmSync(record, { force: true });
+  // The project in this folder, or else the one with the most memory; the page's picker reaches the rest.
+  let target;
+  try { target = locate(flags).target; } catch {
+    const first = listProjects(claudeDir)[0];
+    if (!first) throw new Error("No project has a memory folder with files in it yet.");
+    target = first.path ? ["--project", first.path] : ["--key", first.key];
+  }
+  fs.mkdirSync(path.dirname(record), { recursive: true });
+  const log = fs.openSync(path.join(path.dirname(record), "server.log"), "a");
+  const child = spawn(process.execPath, [CLI, "review", "--serve", "--launched", ...target, ...(flags.port != null ? ["--port", String(flags.port)] : [])], { detached: true, stdio: ["ignore", log, log] });
+  child.unref();
+  for (let i = 0; i < 300; i++) {
+    const r = read();
+    if (r?.pid === child.pid && (await live(r))) return show(r, "Started the review page");
+    if (child.exitCode != null) break;
+    await new Promise((ok) => setTimeout(ok, 100));
+  }
+  throw new Error(`The review page did not start. See ${path.join(path.dirname(record), "server.log")}`);
 }
 
 function spawnOpen(file) {
@@ -570,6 +710,7 @@ async function main() {
   if (cmd === "schedule") return schedule(flags);
   if (cmd === "merged") return merged(flags, args);
   if (cmd === "projects") return projects(flags);
+  if (cmd === "open") return openPage(flags);
   throw new Error(`Unknown command: ${cmd}. Try: sleep help`);
 }
 

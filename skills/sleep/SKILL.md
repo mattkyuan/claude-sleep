@@ -1,7 +1,7 @@
 ---
 name: sleep
 description: Memory upkeep for Claude Code's auto memory. Shows which memory files the agent actually uses, checks the folder against best practices, archives memories that go unused, and merges unused feedback memories into fewer, sharper ones. Use when the user asks to tidy, clean up, audit, consolidate or "sleep" their memory, or asks which memories are used.
-argument-hint: "[report | archive | consolidate [topic] | restore <file> | schedule | stats]"
+argument-hint: "[report | open | archive | consolidate [topic] | restore <file> | schedule | stats]"
 allowed-tools:
   - Bash(node "${CLAUDE_PLUGIN_ROOT}/sleep.mjs" *)
   - Read
@@ -56,7 +56,7 @@ Pick the flow from the arguments. With none, run **report**, then offer archive 
 
 ## archive
 
-1. Run `archive` (a dry run). It prints `Review: <path>`, a local page with every move, its evidence and every link edit. Give the user that path, and summarize: how many go to the archive, how many to the merge queue, a few example names. To pick moves one by one, the user can run the `review --serve` command that `review` prints (paths already filled in) in their own terminal; it serves the page on 127.0.0.1 with Move and Keep boxes, an Apply button, and a picker for the user's other projects. Don't start it yourself: it runs until stopped.
+1. Run `archive` (a dry run). It prints `Review: <path>`, a local page with every move, its evidence and every link edit. Give the user that path, and summarize: how many go to the archive, how many to the merge queue, a few example names. To pick moves one by one, offer the served page: run `open`, which starts it in the background (or reuses it), opens it in the browser and stops by itself after 2 hours unused. It has Move and Keep boxes, an Apply button, and a picker for the user's other projects.
 2. Ask before running `archive --apply`, unless the user applied from the served page.
 3. After it runs, give the commit hashes from the report, and how to undo: `restore <file>`, or `restore --all` for the whole run.
 
@@ -67,15 +67,15 @@ Merging is the one place where you write memory. Work on one topic per run unles
 1. Run `queue --json`. It returns `memDir`, the `drafts` folder, `notes` (what the user asked you to change in a draft, left on the review page), and the queued memories grouped by the file that links to them (usually a hub). If `notes` has entries, redo those drafts first: read the note, rewrite the draft in the drafts folder to follow it, and say what changed. Otherwise show the topics with their counts, and ask which one to merge, largest first. With more than about 12 files in a topic, take them in batches of about 10.
 2. Read every memory in the batch (`<memDir>/<rel>`) and the hub that links to them.
 3. Group the memories that state the same rule or lesson. Draft one merged memory per group, not one per topic. A memory that fits no group stays queued; don't force it.
-4. Write each merged memory so that it:
-   - keeps every distinct rule, number, date and named example, dropping only repetition;
-   - keeps the **Why:** and **How to apply:** lines; where sources disagree, follows the newest and notes the older view in one line;
-   - starts with frontmatter like the sources: `name` (matching the file name), a `description` of 150 characters or fewer using the words someone would search for, and `metadata.type: feedback`;
-   - has a file name not already used in the memory folder or its `memory-archive/` folder.
-5. Write each draft to the `drafts` folder as `<name>.md`, with one extra frontmatter line naming its sources: `sleep_sources: a.md, b.md`. Then run `review`; it prints `Review: <path>`, a page showing each draft beside its sources. Give the user that path. On the served page (`review --serve`, which the user runs) they can approve a merge or leave you a note per draft.
+4. Write each merged memory by the rules in `${CLAUDE_PLUGIN_ROOT}/docs/merge-rules.md` (read it first). The served page's Draft with Claude button follows the same file.
+5. Write each draft to the `drafts` folder as `<name>.md`, with one extra frontmatter line naming its sources: `sleep_sources: a.md, b.md`. Then run `review`; it prints `Review: <path>`, a page showing each draft beside its sources. Give the user that path. On the served page (`open`) they can approve a merge, leave a note, or have Claude draft or redo merges there without this session.
 6. Ask about each draft: approve, change, or skip. To change one, edit the draft and run `review` again. For each approved draft, run `merged --into <name>.md <source.md> ...`. It moves the draft into memory without the `sleep_sources` line, archives the sources, points every link at the merged memory, and commits. Delete nothing yourself; a skipped draft can stay in the drafts folder.
 7. If a hub line now links to the same merged file several times, offer to collapse those links into one, and Edit the hub only if the user agrees.
 8. Finish with: the merges made, how many memories became how many, the commit hashes, and how to undo a merge (`git -C <memDir> revert <hash>`).
+
+## open
+
+Run `open`. It starts the review page in the background, or reuses one already running, and opens it in the browser. It never prints the page's private address. Tell the user it stops by itself after 2 hours unused, or with `open --stop`. From the page they can apply moves, draft merges with Claude, approve them, and switch projects.
 
 ## restore
 

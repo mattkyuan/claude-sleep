@@ -2,7 +2,7 @@
 
 These are the rules for sleep's review page, and for any UI sleep adds later.
 
-1. **The page decides, the command line acts, Claude writes.** The page records choices. Only the command line moves files. Claude only drafts merges, and rewrites a draft when you leave it a note.
+1. **The page decides, the command line acts, Claude drafts.** The page records choices. Only the command line moves files. Claude only drafts merges, and rewrites a draft when you leave it a note. When the page asks Claude, Claude gets no tools: it answers with text, and the server checks each draft (a safe new name, sources from the batch it chose) before writing it.
 2. **Nothing happens until you apply it, and the page says so.** A change takes two clicks. Every applied run is committed to the memory folder's own git history, and the page shows how to undo it.
 3. **Every decision has its evidence beside it:** why the file was picked, when it was created, when it was last used, and in how many sessions.
 4. **Decide in bulk, inspect in detail.** Groups have Move all and Keep all buttons, and any row opens to show the file or the change.

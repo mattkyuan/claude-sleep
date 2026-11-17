@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import http from "node:http";
 import { fileURLToPath } from "node:url";
 
 export const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -73,5 +74,28 @@ export function standard(fx) {
   fx.write("eps.md", mem("eps", "project", "Old payment flow", EPS));
   fx.write("zeta.md", mem("zeta", "feedback", "Frontend reviewers", ZETA));
   fx.write("hub_ops.md", mem("hub_ops", "reference", "Ops hub", "- [Beta](beta.md)\n- [[gamma]]"));
+}
+
+
+// Starts `review --serve` on a free port and returns helpers that speak to it.
+export async function serve(t, flags, fx, env = {}) {
+  const p = spawn(process.execPath, [CLI, "review", "--serve", "--port", "0", ...flags], { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, CLAUDE_CONFIG_DIR: fx.claude, ...env } });
+  t.after(() => p.kill());
+  const url = await new Promise((resolve, reject) => {
+    let out = "";
+    p.stdout.on("data", (c) => { out += c; const m = /Review: (http:\/\/\S+)/.exec(out); if (m) resolve(new URL(m[1])); });
+    p.on("close", (code) => reject(new Error(`server exited ${code}`)));
+  });
+  const token = url.searchParams.get("token");
+  const req = (method, pathname, { headers = {}, body } = {}) => new Promise((resolve, reject) => {
+    const r = http.request({ host: "127.0.0.1", port: url.port, method, path: pathname, headers: { Host: `127.0.0.1:${url.port}`, ...headers } }, (res) => {
+      let data = ""; res.on("data", (c) => (data += c)); res.on("end", () => resolve({ status: res.statusCode, headers: res.headers, body: data }));
+    });
+    r.on("error", reject);
+    if (body != null) r.write(typeof body === "string" ? body : JSON.stringify(body));
+    r.end();
+  });
+  const act = (pathname, body, headers = {}) => req("POST", pathname, { headers: { "Content-Type": "application/json", "X-Sleep-Token": token, ...headers }, body });
+  return { url, token, req, act };
 }
 

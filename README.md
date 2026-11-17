@@ -47,6 +47,7 @@ node sleep.mjs archive --apply --project ~/code/my-project
 | `queue` | The consolidation queue, grouped by the hub that links to each memory |
 | `merged --into <file> <queued>...` | Records a merge the skill wrote: archives the sources and points their links at the merged file |
 | `review --serve [--port N]` | The same page on 127.0.0.1, where you decide: tick or untick each move, Move all or Keep all per hub, Apply; approve a merge draft, or leave Claude a note to redo it. A picker at the top switches to any other project with memory. The address carries a private key; every action is checked against sleep's own plan and runs the command line, so it is committed and can be undone. |
+| `open [--stop]` | Start the served page in the background, or reuse it, and open it in your browser. It stops by itself after 2 hours unused. From the page, Draft with Claude runs `claude -p` with no tools on one queued topic (up to 10 memories) and writes the drafts it returns after checking them; nothing merges until you approve. It runs on your Claude plan. |
 | `projects [--json]` | Every project with memory, with its folder and file count. Memory is per project, so this is the way to find the others. |
 | `review [--open]` | A local page with every proposed move, its evidence, each link edit as before and after, and merge drafts beside their sources. Changes nothing. An `archive` dry run writes one too. |
 | `stats` | Memory size over time, and sleep's error rate: files restored after archiving, or read again from the archive |

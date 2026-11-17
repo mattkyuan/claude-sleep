@@ -4,9 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import http from "node:http";
-import { spawn } from "node:child_process";
-import { mem, fixture, standard, CLI, BETA, DELTA } from "./helpers.mjs";
+import { mem, fixture, standard, serve, BETA, DELTA } from "./helpers.mjs";
 
 const THETA = "Theta says to run the slow browser suite only on the merge queue.";
 const IOTA = "Iota says retry a flaky browser test once, then quarantine it.";
@@ -34,28 +32,6 @@ test("archive --apply --only moves just the named planned files and ignores name
   assert.ok(exists("MEMORY.md") && exists("delta.md"), "named but not planned: stays");
   assert.ok(fs.readFileSync(path.join(fx.memDir, "hub_ops.md"), "utf8").includes("[Beta](memory-archive/beta.md)"));
 });
-
-// Starts `review --serve` on a free port and returns helpers that speak to it.
-async function serve(t, flags, fx) {
-  const p = spawn(process.execPath, [CLI, "review", "--serve", "--port", "0", ...flags], { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, CLAUDE_CONFIG_DIR: fx.claude } });
-  t.after(() => p.kill());
-  const url = await new Promise((resolve, reject) => {
-    let out = "";
-    p.stdout.on("data", (c) => { out += c; const m = /Review: (http:\/\/\S+)/.exec(out); if (m) resolve(new URL(m[1])); });
-    p.on("close", (code) => reject(new Error(`server exited ${code}`)));
-  });
-  const token = url.searchParams.get("token");
-  const req = (method, pathname, { headers = {}, body } = {}) => new Promise((resolve, reject) => {
-    const r = http.request({ host: "127.0.0.1", port: url.port, method, path: pathname, headers: { Host: `127.0.0.1:${url.port}`, ...headers } }, (res) => {
-      let data = ""; res.on("data", (c) => (data += c)); res.on("end", () => resolve({ status: res.statusCode, headers: res.headers, body: data }));
-    });
-    r.on("error", reject);
-    if (body != null) r.write(typeof body === "string" ? body : JSON.stringify(body));
-    r.end();
-  });
-  const act = (pathname, body, headers = {}) => req("POST", pathname, { headers: { "Content-Type": "application/json", "X-Sleep-Token": token, ...headers }, body });
-  return { url, token, req, act };
-}
 
 test("the served page needs the key, then a cookie, and runs only its own nonce-tagged script", async (t) => {
   const { fx, flags } = setup();
