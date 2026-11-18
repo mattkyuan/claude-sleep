@@ -7,7 +7,7 @@ import { readMemory, INDEX } from "./lib/memory.mjs";
 import { usage, loadLedger, saveLedger } from "./lib/usage.mjs";
 import { DEFAULTS, checks, candidates } from "./lib/checks.mjs";
 import { writeReport } from "./lib/report.mjs";
-import { loadMoves, saveMoves, activeArchived, planMoves, applyMoves, setHint, pruneEmpty, redirectSlugs, linkEdits, hasHint, HINT } from "./lib/archive.mjs";
+import { loadMoves, saveMoves, activeArchived, planMoves, applyMoves, heldLinks, safeRel, setHint, pruneEmpty, redirectSlugs, linkEdits, hasHint, HINT } from "./lib/archive.mjs";
 import { ensureRepo, commitAll } from "./lib/git.mjs";
 import { loadSteps, saveSteps, snapshot, movesDiff, rewindMoves, nextGroup, inHistory, revertAll, datesOf, movedBy, putDatesBack } from "./lib/undo.mjs";
 import { record, summarize } from "./lib/stats.mjs";
@@ -259,9 +259,10 @@ async function archive(flags) {
     const movesBefore = snapshot(ctx.moves);
     ensureRepo(ctx.memDir);
     r.commits.before = commitAll(ctx.memDir, "sleep: snapshot before archiving");
+    const held = heldLinks(ctx.memDir, planned);
     applyMoves(ctx.memDir, planned);
     const at = new Date().toISOString();
-    for (const m of planned) ctx.moves.push({ ...m, at, status: "active" });
+    for (const m of planned) ctx.moves.push({ ...m, at, status: "active", ...(held.has(m.to) ? { held: held.get(m.to) } : {}) });
     for (const m of purge) { fs.unlinkSync(path.join(ctx.memDir, m.to)); m.status = "purged"; m.purgedAt = at; }
     setHint(ctx.memDir, ctx.moves.some((m) => m.status === "active"));
     saveMoves(ctx.movesFile, ctx.moves);
@@ -280,8 +281,8 @@ async function archive(flags) {
   finish(r, ctx, flags, `${verb} ${planned.length} file(s) (${planned.filter((m) => m.kind === "archive").length} to Archive, ${planned.filter((m) => m.kind === "consolidate").length} to Consolidate)${purge.length ? `; ${flags.apply ? "purged" : "would purge"} ${purge.length}` : ""}.${flags.apply ? "" : " Run with --apply to do it."}`);
 }
 
-// Puts moved files back and points their links at them again. A link that was already broken before the move
-// can come back pointing at the file it meant; a link that worked is never changed.
+// Puts moved files back and points their links at them again. A link that was broken before the move, and that the
+// move completed by chance (the record's `held`), is left as it was, so a restore gives back exactly what was there.
 async function restore(flags, args) {
   if (flags.all ? args.length : args.length !== 1) throw new Error("Usage: sleep restore <file>, or sleep restore --all");
   const ctx = await context(flags);
@@ -292,7 +293,9 @@ async function restore(flags, args) {
   const movesBefore = snapshot(ctx.moves);
   ensureRepo(ctx.memDir);
   commitAll(ctx.memDir, "sleep: snapshot before restoring");
-  applyMoves(ctx.memDir, picked.map((m) => ({ from: m.to, to: m.from })), [], { fresh: true });
+  const keep = new Map();
+  for (const m of picked) for (const h of Array.isArray(m.held) ? m.held : []) if (safeRel(h)) { const f = path.join(ctx.memDir, h); (keep.get(f) || keep.set(f, new Set()).get(f)).add(path.join(ctx.memDir, m.to)); }
+  applyMoves(ctx.memDir, picked.map((m) => ({ from: m.to, to: m.from })), [], { fresh: true, keep });
   const at = new Date().toISOString();
   for (const m of picked) { m.status = "restored"; m.restoredAt = at; }
   setHint(ctx.memDir, ctx.moves.some((x) => x.status === "active"));
@@ -365,12 +368,13 @@ async function merged(flags, sources) {
   const slugOf = (rel) => { const t = fs.readFileSync(path.join(ctx.memDir, rel), "utf8"); const n = /^name:\s*["']?([^\s"']+)/m.exec(t.slice(0, 600)); return [path.basename(rel, ".md"), n && n[1]].filter(Boolean); };
   const mergedSlug = slugOf(into).at(-1);
   const slugMap = new Map(picked.flatMap((m) => slugOf(m.to).map((sl) => [sl, mergedSlug])));
+  const held = heldLinks(ctx.memDir, targets);
   applyMoves(ctx.memDir, targets, picked.map((m) => ({ from: m.to, to: into })));
   redirectSlugs(ctx.memDir, slugMap);
   const at = new Date().toISOString();
   for (const [i, m] of picked.entries()) {
     m.status = "merged"; m.mergedAt = at;
-    ctx.moves.push({ kind: "merged", name: m.name, from: m.to, to: targets[i].to, into, at, status: "active" });
+    ctx.moves.push({ kind: "merged", name: m.name, from: m.to, to: targets[i].to, into, at, status: "active", ...(held.has(targets[i].to) ? { held: held.get(targets[i].to) } : {}) });
   }
   setHint(ctx.memDir, true);
   pruneEmpty(ctx.memDir);

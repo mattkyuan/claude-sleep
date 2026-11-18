@@ -5,7 +5,27 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { mem, fixture, standard, BETA, DELTA, ZETA } from "./helpers.mjs";
-import { applyMoves } from "../lib/archive.mjs";
+import { applyMoves, heldLinks } from "../lib/archive.mjs";
+import os from "node:os";
+
+// Only a link that named nothing is held. f.md's link to x.md works (x.md stays put); a different x.md moving into
+// the archive beside f.md must not make that link look completed by chance.
+test("heldLinks holds only links that were broken before the moves", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sleep-held-"));
+  for (const d of ["memory-archive", "consolidate"]) fs.mkdirSync(path.join(dir, d));
+  fs.writeFileSync(path.join(dir, "x.md"), "x\n");
+  fs.writeFileSync(path.join(dir, "consolidate", "x.md"), "another x\n");
+  fs.writeFileSync(path.join(dir, "f.md"), "[X](x.md)\n");
+  fs.writeFileSync(path.join(dir, "memory-archive", "old.md"), "[Y](y.md)\n");
+  fs.writeFileSync(path.join(dir, "y.md"), "y\n");
+  const held = heldLinks(dir, [
+    { from: "f.md", to: "memory-archive/f.md" },
+    { from: "consolidate/x.md", to: "memory-archive/x.md" },
+    { from: "y.md", to: "memory-archive/y.md" },
+  ]);
+  assert.deepEqual([...held], [["memory-archive/y.md", ["memory-archive/old.md"]]]);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
 
 // Every file and folder under the memory folder except git's own, as relative path -> content.
 function snapshot(dir) {
@@ -113,6 +133,52 @@ test("restore --all undoes a whole run in one commit", () => {
   assert.equal(r.status, 0, r.stderr);
   assert.deepEqual(snapshot(fx.memDir), before);
   assert.match(git("log", "-1", "--format=%s"), /^sleep: restored 3 files$/);
+});
+
+test("MEMORY.md keeps its edit date when sleep adds and removes its search-order line", () => {
+  const { fx, archive } = setup();
+  const index = path.join(fx.memDir, "MEMORY.md");
+  const mtime = () => Math.round(fs.statSync(index).mtimeMs / 1000);
+  const before = mtime();
+  archive(["--apply"]);
+  assert.match(fs.readFileSync(index, "utf8"), /added by sleep/);
+  assert.equal(mtime(), before, "after archive");
+  assert.equal(fx.run(["undo", "--project", fx.project, "--state", fx.state]).status, 0);
+  assert.equal(mtime(), before, "after undo");
+  archive(["--apply"]);
+  assert.equal(fx.run(["restore", "--all", "--project", fx.project, "--state", fx.state]).status, 0);
+  assert.doesNotMatch(fs.readFileSync(index, "utf8"), /added by sleep/);
+  assert.equal(mtime(), before, "after restore");
+});
+
+// An old file in the archive already linked beta.md by bare name: broken there, since beta.md lives one level up.
+// Archiving beta.md makes that link resolve by chance; restoring must leave it as it was, not point it at ../beta.md.
+test("restore leaves a link that was broken before the move as it was", () => {
+  const { fx, archive } = setup();
+  fs.mkdirSync(path.join(fx.memDir, "memory-archive"));
+  fx.write("memory-archive/old_index.md", "# Old index\n- [Beta](beta.md) staging\n- [Alpha](../alpha.md) deploys\n");
+  const before = snapshot(fx.memDir);
+  const moved = archive(["--apply"]).moves;
+  assert.ok(moved.some((m) => m.to === "memory-archive/beta.md"));
+  assert.equal(fs.readFileSync(path.join(fx.memDir, "memory-archive", "old_index.md"), "utf8"), before["memory-archive/old_index.md"], "archive leaves it alone");
+  const r = fx.run(["restore", "--all", "--project", fx.project, "--state", fx.state]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(snapshot(fx.memDir), before);
+  // A link sleep itself rewrote still comes back: the hub's link to beta.md.
+  assert.match(fs.readFileSync(path.join(fx.memDir, "hub_ops.md"), "utf8"), /\[Beta\]\(beta\.md\)/);
+});
+
+// gamma.md links beta.md, which worked, and both go to the archive, where the link still reads beta.md. Restoring
+// beta.md alone must point gamma's link up a level: a link that worked before the move is never held.
+test("restoring one file fixes a working link to it from another archived file", () => {
+  const { fx, archive } = setup();
+  fx.write("gamma.md", mem("gamma", "project", "Flaky login", "Gamma records that the flaky login test needs a retry wrapper.\nSee [Beta](beta.md)."));
+  const moved = archive(["--apply"]).moves.map((m) => m.to);
+  assert.ok(moved.includes("memory-archive/beta.md") && moved.includes("memory-archive/gamma.md"), moved.join());
+  assert.match(fs.readFileSync(path.join(fx.memDir, "memory-archive", "gamma.md"), "utf8"), /\[Beta\]\(beta\.md\)/);
+  const r = fx.run(["restore", "beta.md", "--project", fx.project, "--state", fx.state]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(fs.readFileSync(path.join(fx.memDir, "memory-archive", "gamma.md"), "utf8"), /\[Beta\]\(\.\.\/beta\.md\)/);
 });
 
 test("restore refuses to overwrite a file that has come back in the meantime", () => {
