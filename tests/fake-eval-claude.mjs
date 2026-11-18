@@ -23,6 +23,10 @@ walk(memDir);
 const hit = files.find((f) => path.basename(f) !== "MEMORY.md" && prompt.includes(path.basename(f, ".md")));
 const reads = [hit, e.FAKE_READ].filter(Boolean);
 for (const [i, f] of reads.entries()) out({ type: "assistant", message: { content: [{ type: "tool_use", id: `t${i}`, name: "Read", input: { file_path: f } }] } });
+// FAKE_GLOB: a Glob with this pattern, searched from the project folder. FAKE_GREP_GLOB: a Grep limited by this glob.
+if (e.FAKE_GLOB) out({ type: "assistant", message: { content: [{ type: "tool_use", id: "g1", name: "Glob", input: { pattern: e.FAKE_GLOB } }] } });
+if (e.FAKE_TOOL_USE) out({ type: "assistant", message: { content: [{ type: "tool_use", id: "x1", name: e.FAKE_TOOL_USE, input: { command: "ls" } }] } });
+if (e.FAKE_GREP_GLOB) out({ type: "assistant", message: { content: [{ type: "tool_use", id: "g2", name: "Grep", input: { pattern: "x", glob: e.FAKE_GREP_GLOB } }] } });
 if (e.FAKE_WRITE) fs.appendFileSync(path.join(memDir, e.FAKE_WRITE), "\nchanged\n");
 const body = hit ? fs.readFileSync(hit, "utf8").replace(/^---[\s\S]*?---\n/, "").trim() : "Nothing in memory covers that.";
 if (e.FAKE_IS_ERROR) { out({ type: "result", subtype: "success", is_error: true, result: e.FAKE_IS_ERROR }); process.exit(Number(e.FAKE_EXIT ?? 1)); }

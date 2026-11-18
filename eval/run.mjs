@@ -3,7 +3,7 @@
 //
 //   node eval/run.mjs freeze --dir out/eval
 //   node eval/run.mjs run --dir out/eval --model sonnet --arm A=<memory copy> --arm C=<memory copy> [--repeats 3]
-//       [--config ~/.claude-ablation] [--work /private/tmp/sleep-eval] [--limit N] [--timeout 300]
+//       [--config ~/.claude-ablation] [--work <system temp>/sleep-eval] [--limit N] [--timeout 300]
 //
 // Each arm's memory copy goes where Claude Code's auto memory looks for a folder outside $HOME, under a config folder
 // that is not ~/.claude, with an opaque name so nothing in a prompt or path says which arm it is. Every call is
@@ -61,18 +61,29 @@ function arms(dir, flags, config, work) {
   return out;
 }
 
-// Every file a tool call touched or searched, as an absolute path.
+// Every place a tool call read or searched, as an absolute path, or a reason it is out of bounds. A file pattern
+// (Glob's pattern, Grep's glob) is resolved against the folder it searches, relative or absolute, and its fixed part
+// before any wildcard is what gets checked. A ".." anywhere in a path-like input counts as outside.
 function pathsOf(tool, cwd) {
   const i = tool.input || {};
   const abs = (p) => path.resolve(cwd, p);
+  const fixed = (base, pat) => path.resolve(base, pat.split(/[*?[{]/)[0] || ".");
+  const fields = { Read: ["file_path"], Grep: ["path", "glob"], Glob: ["path", "pattern"] }[tool.name];
+  if (!fields) return [`${tool.name} (not an allowed tool)`];
+  const up = fields.filter((k) => typeof i[k] === "string" && i[k].split(/[\\/]/).includes(".."));
+  if (up.length) return [`${tool.name} ${up.join(", ")} uses ".."`];
   if (tool.name === "Read") return [abs(i.file_path ?? "")];
-  if (tool.name === "Grep") return [abs(i.path ?? ".")];
-  if (tool.name === "Glob") {
-    const ps = [abs(i.path ?? ".")];
-    if (typeof i.pattern === "string" && path.isAbsolute(i.pattern)) ps.push(i.pattern.split(/[*?[{]/)[0] || "/");
-    return ps;
-  }
-  return [null];
+  const base = abs(i.path ?? ".");
+  const pat = tool.name === "Grep" ? i.glob : i.pattern;
+  return typeof pat === "string" ? [base, fixed(base, pat)] : [base];
+}
+
+// The real path, through any symbolic link, even for a file that does not exist: the nearest existing folder above
+// it is resolved, and the rest is added back.
+function canon(p) {
+  let head = p, tail = "";
+  while (!fs.existsSync(head)) { const up = path.dirname(head); if (up === head) break; tail = path.join(path.basename(head), tail); head = up; }
+  try { return path.join(fs.realpathSync(head), tail); } catch { return p; }
 }
 
 function call(bin, arm, probe, model, config, timeout) {
@@ -108,9 +119,10 @@ function check(events, r, arm, probe, state, wantModel) {
 function record(events, arm, probe, rep, init, result) {
   const tools = events.filter((e) => e.type === "assistant").flatMap((e) => (e.message?.content || []).filter((c) => c.type === "tool_use").map((c) => ({ name: c.name, input: c.input })));
   const outside = [], reads = [];
-  for (const t of tools) for (const p of pathsOf(t, arm.cwd)) {
-    if (p == null) outside.push(`${t.name} (not an allowed tool)`);
-    else if (!within(p, arm.memDir) && !within(p, arm.cwd)) outside.push(p);
+  for (const t of tools) for (const raw of pathsOf(t, arm.cwd)) {
+    if (!path.isAbsolute(raw)) { outside.push(raw); continue; }
+    const p = canon(raw);
+    if (!within(p, arm.memDir) && !within(p, arm.cwd)) outside.push(p);
     else if (t.name === "Read" && within(p, arm.memDir)) reads.push(path.relative(arm.memDir, p));
   }
   const answer = String(result.result ?? "");
@@ -139,7 +151,7 @@ async function run(dir, flags) {
   const config = real(flags.config || path.join(home, ".claude-ablation"));
   const realClaude = path.join(home, ".claude");
   if (within(config, fs.existsSync(realClaude) ? real(realClaude) : realClaude)) throw new Error(`--config ${config} is the real Claude Code folder. Use a separate, logged-in config folder.`);
-  const workArg = flags.work || "/private/tmp/sleep-eval";
+  const workArg = flags.work || path.join(os.tmpdir(), "sleep-eval");
   fs.mkdirSync(workArg, { recursive: true });
   const work = real(workArg);
   if (within(work, home)) throw new Error(`--work ${work} is under your home folder, where CLAUDE.md files up the tree would load. Use a folder outside it.`);

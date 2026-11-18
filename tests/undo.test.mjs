@@ -92,6 +92,20 @@ test("one Apply is one step: undo takes back every commit made under the same ru
   assert.match(cli(["undo"]).stderr, /Nothing sleep did is left to undo/);
 });
 
+test("sleep's own link rewrites, by path or by [[slug]], leave the rewritten memory's dates alone", () => {
+  const { fx, ok } = setup();
+  const hub = path.join(fx.memDir, "hub_ops.md"), hubBefore = fs.statSync(hub).mtimeMs, hubText = fs.readFileSync(hub, "utf8");
+  ok(["archive", "--apply"]);
+  assert.notEqual(fs.readFileSync(hub, "utf8"), hubText, "the archive rewrote the hub's links");
+  assert.equal(fs.statSync(hub).mtimeMs, hubBefore, "but the hub does not look newly edited");
+  const kappa = path.join(fx.memDir, "consolidate", "kappa.md");
+  const before = fs.statSync(kappa).mtimeMs;
+  fs.writeFileSync(path.join(fx.memDir, "browser_tests.md"), mem("browser_tests", "feedback", "Browser test rules", `${THETA}\n${IOTA}`));
+  ok(["merged", "--into", "browser_tests.md", "theta.md", "iota.md"]);
+  assert.match(fs.readFileSync(kappa, "utf8"), /\[\[browser_tests\]\]/, "the slug link was rewritten");
+  assert.equal(fs.statSync(kappa).mtimeMs, before, "but the file does not look newly edited");
+});
+
 test("undo refuses, and changes nothing, when a later edit touched the same lines", () => {
   const { fx, ok, cli, git, moves } = setup();
   ok(["archive", "--apply"]);

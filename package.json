@@ -6,5 +6,5 @@
   "type": "module",
   "bin": { "claude-sleep": "sleep.mjs" },
   "engines": { "node": ">=18" },
-  "scripts": { "test": "node --test tests/" }
+  "scripts": { "test": "node --test" }
 }

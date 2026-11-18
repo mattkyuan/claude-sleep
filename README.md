@@ -18,7 +18,7 @@ In Claude Code:
 /plugin install sleep --marketplace mattkyuan/claude-sleep
 ```
 
-Then run `/sleep` in any project. Requires Node 18 or later and git.
+Then run `/sleep` in any project. Requires Node 18 or later and git. Tested on macOS and Linux; Windows is untested (the memory folder names and scheduling there are unverified). On Linux a file's age is its creation time where the filesystem records one, and its last edit otherwise.
 
 ## Use the skill
 

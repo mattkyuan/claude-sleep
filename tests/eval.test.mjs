@@ -98,6 +98,39 @@ test("the run refuses the real Claude folder, a work folder under home, and prob
   assert.equal(u.calls().length + s.calls().length, 0, "nothing ran");
 });
 
+test("a search that reaches outside the arm, by a relative pattern, a glob, \"..\" or a symbolic link, voids the answer", () => {
+  const outside = (env) => { const s = setup(); assert.equal(s.go(env, ["--limit", "1"]).status, 0); return s.results()[0]; };
+  for (const env of [{ FAKE_GLOB: "../../elsewhere/*.md" }, { FAKE_GREP_GLOB: "../*.md" }, { FAKE_GLOB: "/etc/*.conf" }, { FAKE_GLOB: "**/../../../elsewhere/*.md" }, { FAKE_TOOL_USE: "Bash" }]) {
+    const r = outside(env);
+    assert.equal(r.status, "void", JSON.stringify(env));
+  }
+  const inside = outside({ FAKE_GLOB: "**/*.md" });
+  assert.equal(inside.status, "ok", "a pattern inside the project folder is fine");
+  // A path that reads as inside the project folder but runs through a link to somewhere else.
+  const s = setup();
+  assert.equal(s.go({}, ["--limit", "1"]).status, 0);
+  const cwd = JSON.parse(fs.readFileSync(path.join(s.dir, "arms.json"), "utf8")).arms[0].cwd;
+  fs.mkdirSync(path.join(s.t, "elsewhere"));
+  fs.symlinkSync(path.join(s.t, "elsewhere"), path.join(cwd, "door"));
+  assert.equal(s.go({ FAKE_READ: path.join(cwd, "door", "secret.md") }, ["--limit", "1"]).status, 0);
+  const v = s.results().find((x) => x.status === "void");
+  assert.ok(v, "the read through the link is voided"); assert.match(v.why, /elsewhere/);
+});
+
+test("an arm with a symbolic link in it is refused; with no --work, the work folder is in the system temp folder", () => {
+  const s = setup();
+  fs.symlinkSync(path.join(s.t, "home"), path.join(s.A, "linked"));
+  const r = s.go();
+  assert.notEqual(r.status, 0); assert.match(r.stderr, /linked is a symbolic link/);
+  assert.equal(s.calls().length, 0);
+  const u = setup();
+  const tmp = path.join(u.t, "systmp");
+  fs.mkdirSync(tmp);
+  const r2 = u.run(["run", "--dir", u.dir, "--model", "sonnet", "--config", u.config, "--arm", `A=${u.A}`, "--repeats", "1", "--limit", "1"], { TMPDIR: tmp });
+  assert.equal(r2.status, 0, r2.stderr);
+  assert.ok(u.calls()[0].cwd.startsWith(path.join(tmp, "sleep-eval") + "/"), u.calls()[0].cwd);
+});
+
 test("a resume refuses when an arm's memory copy or its source folder changed since the run started", () => {
   const s = setup();
   assert.equal(s.go({}, ["--limit", "2"]).status, 0);
@@ -181,6 +214,11 @@ test("the judge bundle hides which arm each answer came from; the report groups 
   for (const leak of [s.config, s.work, s.t, ...arms.flatMap((a) => [a.id, a.memDir])]) assert.ok(!md.includes(leak), `bundle names ${leak}`);
   assert.match(md, /cheques\. \(from <memory>\/old_flow\.md\)/);
   assert.doesNotMatch(md, /memory-archive|consolidate\//, "where sleep put a file would say which arm it is");
+  // Claude quotes the folder without the copy's path in front, too.
+  const q = setup();
+  assert.equal(q.go({ FAKE_ANSWER: "Per memory/memory-archive/old_flow.md, cheques." }).status, 0);
+  assert.equal(q.score(["bundle", "--dir", q.dir]).status, 0);
+  assert.doesNotMatch(fs.readFileSync(path.join(q.dir, "judge", "bundle.md"), "utf8"), /memory-archive/);
   fs.writeFileSync(path.join(s.dir, "judge", "verdicts.json"), JSON.stringify(Object.fromEntries(Object.keys(key).map((id) => [id, { pass: true }]))));
   r = s.score(["report", "--dir", s.dir]);
   assert.equal(r.status, 0, r.stderr);

@@ -18,12 +18,14 @@ export function writeJSON(f, v) {
   fs.renameSync(f + ".tmp", f);
 }
 
-// Every file under dir, by path and content, so a probe that changed the memory copy is caught.
+// Every file under dir, by path and content, so a probe that changed the memory copy is caught. Refuses a symbolic
+// link, on macOS and Linux alike.
 export function hashDir(dir) {
   const h = crypto.createHash("sha256");
   const walk = (d) => {
     for (const e of fs.readdirSync(d, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
       const f = path.join(d, e.name);
+      if (e.isSymbolicLink()) throw new Error(`${f} is a symbolic link. An arm must hold plain files: a read through a link could leave the arm unseen.`);
       if (e.isDirectory()) walk(f);
       else if (e.isFile()) h.update(`${path.relative(dir, f)}\0`).update(fs.readFileSync(f)).update("\0");
     }

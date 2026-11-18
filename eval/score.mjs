@@ -40,7 +40,9 @@ function scrubber(state) {
   for (const a of state.arms) subs.push([a.memDir, "<memory>"], [a.cwd, "<work>"], [keyOf(a.cwd), "<project>"], [a.id, "<arm>"], [a.source, "<memory>"]);
   subs.sort((x, y) => y[0].length - x[0].length);
   // Which folder inside the copy a file sat in says where sleep put it, so it would tell the judge the arm too.
-  return (s) => subs.reduce((t, [from, to]) => t.split(from).join(to), s).replace(/<memory>\/(memory-archive|consolidate)\//g, "<memory>/");
+  // Claude quotes it in any form ("memory/memory-archive/x.md", "the memory-archive folder"), so it goes everywhere.
+  const scrub = (s) => subs.reduce((t, [from, to]) => t.split(from).join(to), s).replace(/memory-archive\/?|consolidate\//gi, "");
+  return scrub;
 }
 
 function bundle(dir) {
@@ -55,6 +57,7 @@ function bundle(dir) {
   const md = [
     "# Judge bundle", "",
     "Each item is one answer to a task. Judge it only against its pass line. You do not know, and should not guess, which setup produced it.",
+    "Some answers say a memory was archived or where it was found. That is not part of any pass line: ignore it.",
     "Write judge/verdicts.json as { \"<id>\": { \"pass\": true or false, \"note\": \"one sentence\" } } for every item.", "",
     ...(rubric ? ["## Rubric", "", rubric, ""] : []),
     ...items.flatMap(({ id, r }) => { const p = byId.get(r.probe); return [`## Item ${id}`, "", `Task: ${scrub(p.prompt)}`, "", `Pass when: ${scrub(p.judge)}`, "", "Answer:", "", "~~~~", scrub(r.answer), "~~~~", ""]; }),
