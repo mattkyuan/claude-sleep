@@ -114,6 +114,8 @@ A file is used in a session when its text comes back in a tool result, whatever 
 
 Every command appends a line to `sleep/stats.jsonl`. `sleep stats` turns that into a trend and an error rate: a file sleep archived and you restored, or one the agent read again from the archive, counts as a mistake. It can't tell whether the agent got better; only fewer repeated mistakes would show that.
 
+To check whether Claude still applies its memory after a run, `eval/` holds a before-and-after harness: task prompts run with `claude -p` on your subscription against scratch copies of the memory folder, scored against bars fixed in advance. See [docs/plans/2026-11-17-eval.md](docs/plans/2026-11-17-eval.md). Probes hold memory content, so keep them in `out/eval/`, which git ignores.
+
 Everything stays on your machine. No dependencies.
 
 ## License
