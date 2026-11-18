@@ -4,6 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import crypto from "node:crypto";
 import { key, mem, fixture, standard, ALPHA, BETA, GAMMA, DELTA, EPS, ZETA } from "./helpers.mjs";
 
@@ -110,6 +111,23 @@ test("run from a Claude Code worktree, it reads the main checkout's memory", () 
   const r = fx.run(["report", "--project", wt, "--state", fx.state, "--json"]);
   assert.equal(r.status, 0, r.stderr);
   assert.equal(JSON.parse(r.stdout).memDir, fx.memDir);
+});
+
+test("a command that names a memory file by its path and gets output back used it, even when the output is too short to recognize", () => {
+  const fx = fixture(); standard(fx);
+  const p = (n) => path.join(fx.memDir, n);
+  fx.session([{ tool: "Bash", input: { command: `grep -hoE "proj_[a-z]+" ${p("alpha.md")}` }, result: "proj_abcdef" }]);
+  fx.session([{ tool: "Bash", input: { command: `sed -n 7p ${p("beta.md").replace(os.homedir(), "~")}` }, result: "staging" }]);
+  fx.session([{ tool: "Grep", input: { pattern: "retry", path: p("gamma.md") }, result: "wrapper" }]);
+  // Not reads: a listing, an empty result, an error, a search that found nothing.
+  fx.session([{ tool: "Bash", input: { command: `ls -l ${p("delta.md")}` }, result: `-rw-r--r-- 1 me staff 120 ${p("delta.md")}` }]);
+  fx.session([{ tool: "Bash", input: { command: `grep -c nothing ${p("eps.md")}` }, result: "" }]);
+  fx.session([{ tool: "Bash", input: { command: `cat ${p("zeta.md")}` }, result: "cat: no such file", isError: true }]);
+  fx.session([{ tool: "Grep", input: { pattern: "x", path: p("eps.md") }, result: "No matches found" }]);
+  fx.session([{ tool: "Bash", input: { command: `grep -ho zz ${p("eps.md")}` }, result: "(Bash completed with no output)" }]);
+  const used = Object.fromEntries(fx.report().files.map((f) => [f.name, f.usage.sessions]));
+  assert.deepEqual([used["alpha.md"], used["beta.md"], used["gamma.md"]], [1, 1, 1], "grep -o, sed -n through ~, Grep on one file");
+  assert.deepEqual([used["delta.md"], used["eps.md"], used["zeta.md"]], [0, 0, 0], "ls, empty, error, no match");
 });
 
 test("a listing of file names is not use", () => {

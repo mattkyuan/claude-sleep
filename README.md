@@ -108,7 +108,7 @@ node sleep.mjs schedule --every weekly --day mon --at 09:00
 
 ## What counts as use
 
-A file is used in a session when its text comes back in a tool result, whatever command fetched it (Read, cat, grep, a script). A single quoted error line doesn't count unless the command named the file. Sessions that edit memory are left out. Claude Code deletes session logs after 30 days, so sleep keeps its own ledger, and nothing moves until that ledger covers the full window.
+A file is used in a session when its text comes back in a tool result, whatever command fetched it (Read, cat, grep, a script). A single quoted error line doesn't count unless the command named the file. A command that names a memory file by its path and gets any output back counts too, even when the output is too short to recognize (a `grep -o` pulling one value); a listing (`ls`, `find`), an error or an empty result does not. In a chain of commands, the output may have come from another part of it, so this errs toward counting use, which keeps a file out of the archive. Sessions that edit memory are left out. Claude Code deletes session logs after 30 days, so sleep keeps its own ledger, and nothing moves until that ledger covers the full window.
 
 ## How well it works
 

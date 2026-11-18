@@ -38,7 +38,7 @@ export function fixture() {
       const id = `toolu_${sid}_${i}`;
       const where = cwd ? { cwd } : {};
       lines.push(JSON.stringify({ type: "assistant", timestamp: at, ...where, message: { content: [{ type: "tool_use", id, name: e.tool, input: e.input || {} }] } }));
-      lines.push(JSON.stringify({ type: "user", timestamp: at, ...where, message: { content: [{ type: "tool_result", tool_use_id: id, content: e.result ?? "" }] } }));
+      lines.push(JSON.stringify({ type: "user", timestamp: at, ...where, message: { content: [{ type: "tool_result", tool_use_id: id, content: e.result ?? "", ...(e.isError ? { is_error: true } : {}) }] } }));
     }
     let file = path.join(dir, `${sid}.jsonl`);
     if (sub) { fs.mkdirSync(path.join(dir, sid, "subagents"), { recursive: true }); fs.writeFileSync(file, ""); file = path.join(dir, sid, "subagents", `${sub}.jsonl`); }
