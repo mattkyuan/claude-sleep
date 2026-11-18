@@ -16,7 +16,6 @@ import { fileURLToPath } from "node:url";
 import { frontmatter } from "./lib/memory.mjs";
 import { reviewHtml, pickerHtml } from "./lib/review.mjs";
 import { memoryGraph } from "./lib/graph.mjs";
-import { mapHtml, mapCsp } from "./lib/map.mjs";
 import { startServer } from "./lib/serve.mjs";
 import { spawn } from "node:child_process";
 import { indexSystemPrompt, buildIndexInput, parseIndexChanges, checkIndexChanges, applyChanges, indexFolder } from "./lib/index.mjs";
@@ -816,20 +815,18 @@ async function serveReview(flags) {
     const { loc, flags: f } = pick(url.searchParams.get("project"));
     const ctx = await context(f);
     const planned = planMoves(ctx.memDir, ctx.cand.list, ctx.cand.consolidate);
-    return reviewHtml(reviewData(ctx, planned, purgeList(ctx, purgeDays(f, ctx.state))), { nonce, token, project: loc.key, projects: projects() });
+    const graph = memoryGraph({ mem: ctx.mem, planned, drafts: readDrafts(ctx) });
+    return reviewHtml(reviewData(ctx, planned, purgeList(ctx, purgeDays(f, ctx.state))), { nonce, token, project: loc.key, projects: projects(), graph });
   };
   const port = flags.port != null ? Number(flags.port) : 8767;
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error("--port must be a port number");
-  // The 3D map of the same project: where each file is now, and where the plan and the drafts would put it.
+  // The old map page: the map is a view of the review page now.
   const renderMap = async (nonce, token, url) => {
-    const { loc, flags: f } = pick(url.searchParams.get("project"));
-    const ctx = await context(f);
-    const planned = planMoves(ctx.memDir, ctx.cand.list, ctx.cand.consolidate);
-    const g = memoryGraph({ mem: ctx.mem, planned, drafts: readDrafts(ctx) });
-    const r = { memDir: ctx.memDir };
-    return { html: mapHtml(g, { nonce, token, project: loc.key, memDir: ctx.memDir, pickerHtml: pickerHtml(r, { project: loc.key, projects: projects() }) }), csp: mapCsp(nonce) };
+    const { loc } = pick(url.searchParams.get("project"));
+    return { redirect: `/?project=${encodeURIComponent(loc.key)}&view=map` };
   };
-  const files = { "/vendor/graph3d.mjs": { path: path.join(path.dirname(CLI), "vendor", "graph3d.mjs"), type: "text/javascript; charset=utf-8" } };
+  const js = (...p) => ({ path: path.join(path.dirname(CLI), ...p), type: "text/javascript; charset=utf-8" });
+  const files = { "/vendor/graph3d.mjs": js("vendor", "graph3d.mjs"), "/lib/steps.mjs": js("lib", "steps.mjs"), "/lib/mapview.mjs": js("lib", "mapview.mjs") };
   const { url } = await startServer({ port, render: used(render), actions, pages: { "/map": used(renderMap) }, files });
   if (flags.launched) {
     // Started by sleep open: leave a record only you can read, and stop by itself once unused for the idle time.

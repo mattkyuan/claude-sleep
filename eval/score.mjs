@@ -41,7 +41,7 @@ function scrubber(state) {
   subs.sort((x, y) => y[0].length - x[0].length);
   // Which folder inside the copy a file sat in says where sleep put it, so it would tell the judge the arm too.
   // Claude quotes it in any form ("memory/memory-archive/x.md", "the memory-archive folder"), so it goes everywhere.
-  const scrub = (s) => subs.reduce((t, [from, to]) => t.split(from).join(to), s).replace(/memory-archive\/?|consolidate\//gi, "");
+  const scrub = (s) => subs.reduce((t, [from, to]) => t.split(from).join(to), s).replace(/memory-archive[\\/]?|consolidate[\\/]/gi, "");
   return scrub;
 }
 

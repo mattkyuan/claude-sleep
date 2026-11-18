@@ -1,5 +1,5 @@
-// Tests for the 3D map (/map on the served page): the graph it draws before and after the plan, its escaping, its
-// security policy, and the vendored library it loads from 127.0.0.1 only.
+// Tests for the 3D map, the pane of the served review page: the graph it draws before and after the plan, its
+// escaping, its security policy, and the modules it loads from 127.0.0.1 only.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -32,7 +32,7 @@ test("the map shows each memory on its floor before the plan and after it, with 
   fs.mkdirSync(path.join(fx.state, "drafts"), { recursive: true });
   fs.writeFileSync(path.join(fx.state, "drafts", "suites.md"), `---\nname: suites\ndescription: Suites\nsleep_sources: theta.md\nmetadata:\n  type: feedback\n---\n\nx\n`);
   const { get } = await open(t, fx, flags);
-  const r = await get("/map");
+  const r = await get("/");
   assert.equal(r.status, 200);
   const g = graphOf(r.body);
   const node = (id) => g.nodes.find((n) => n.id === id);
@@ -45,7 +45,7 @@ test("the map shows each memory on its floor before the plan and after it, with 
   const has = (s, t, kind = "link") => g.links.some((l) => l.source === s && l.target === t && l.kind === kind);
   assert.ok(has("MEMORY.md", "alpha.md") && has("hub_ops.md", "beta.md") && has("hub_ops.md", "gamma.md"));
   assert.ok(has("theta.md", "suites.md", "merge"), "a merge links each source to its draft");
-  assert.ok(!r.body.includes("Epsilon explains"), "no memory text on the map, only names and descriptions");
+  assert.ok(!JSON.stringify(g).includes("Epsilon explains"), "no memory text in the map's data, only names and descriptions");
 });
 
 test("the map has four steps: drafts join their topic at step 3, and only drafts that start ticked apply at step 4", async (t) => {
@@ -63,7 +63,7 @@ test("the map has four steps: drafts join their topic at step 3, and only drafts
   draft("push.md", ["kappa.md", "lambda.md"]);
   fs.writeFileSync(path.join(fx.state, "drafts.json"), JSON.stringify({ "suites.md": { topic: "hub_tests.md", sources: {} }, "push.md": { topic: "hub_tests.md", sources: {} } }));
   const { get } = await open(t, fx, flags);
-  const g = graphOf((await get("/map")).body);
+  const g = graphOf((await get("/")).body);
   const node = (id) => g.nodes.find((n) => n.id === id);
   assert.deepEqual(node("kappa.md").at, ["memory", "queue", "queue", "archive"]);
   assert.equal(node("kappa.md").topic, "hub_tests.md");
@@ -83,32 +83,48 @@ function writeOnly(fx, names) {
 test("memory text cannot break out of the map's data", async (t) => {
   const { fx, flags } = setup();
   const { get } = await open(t, fx, flags);
-  const r = await get("/map");
-  assert.equal((r.body.match(/<\/script/gi) || []).length, 2, "only the page's own two script blocks close");
+  const r = await get("/");
+  assert.equal((r.body.match(/<\/script/gi) || []).length, 3, "only the page's own three script blocks close");
   assert.equal(graphOf(r.body).nodes.find((n) => n.id === "eps.md").description, "Old flow </script><b>x", "and intact in the data");
 });
 
-test("the map runs only its own script and the vendored library, from this address, without eval", async (t) => {
+test("the map runs only the page's own scripts and modules from this address, without eval", async (t) => {
   const { fx, flags } = setup();
   const { get, req } = await open(t, fx, flags);
-  const r = await get("/map");
+  const r = await get("/");
   const csp = r.headers["content-security-policy"];
   assert.match(csp, /script-src 'self' 'nonce-[^']+'/);
   assert.match(csp, /connect-src 'self'/);
-  assert.doesNotMatch(csp, /unsafe-eval|https?:/);
-  assert.match(r.body, /import \{ ForceGraph3D, THREE \} from "\/vendor\/graph3d\.mjs"/);
+  assert.doesNotMatch(csp, /unsafe-eval|unsafe-inline'[^;]*script|https?:/);
+  const meta = /http-equiv="Content-Security-Policy" content="([^"]+)"/.exec(r.body)[1];
+  assert.match(meta, /script-src 'self' 'nonce-/, "the page's own policy allows the modules too");
+  assert.match(r.body, /import\("\/lib\/mapview\.mjs"\)/);
+  for (const m of ["/lib/mapview.mjs", "/lib/steps.mjs"]) {
+    const f = await get(m);
+    assert.equal(f.status, 200, m);
+    assert.match(f.headers["content-type"], /^text\/javascript/);
+    assert.equal(f.body, fs.readFileSync(path.join(ROOT, m.slice(1)), "utf8"));
+  }
+  assert.match((await get("/lib/mapview.mjs")).body, /from "\/vendor\/graph3d\.mjs"/);
+  for (const bad of ["/lib/review.mjs", "/lib/../sleep.mjs", "/lib/%2e%2e/sleep.mjs", "/lib/serve.mjs"]) assert.equal((await get(bad)).status, 404, bad);
   const lib = await get("/vendor/graph3d.mjs");
   assert.equal(lib.status, 200);
   assert.match(lib.headers["content-type"], /^text\/javascript/);
   const sha = (b) => crypto.createHash("sha256").update(b).digest("hex");
   assert.equal(sha(lib.body), sha(fs.readFileSync(path.join(ROOT, "vendor", "graph3d.mjs"), "utf8")));
   for (const bad of ["/vendor/../sleep.mjs", "/vendor/%2e%2e/sleep.mjs", "/vendor/LICENSES.md", "/vendor/entry.mjs"]) assert.equal((await get(bad)).status, 404, bad);
-  assert.equal((await req("GET", "/map")).status, 403, "the map needs the cookie");
+  assert.equal((await req("GET", "/lib/mapview.mjs")).status, 403, "the modules need the cookie");
 });
 
-test("the map follows the project picker, and the review page links to it", async (t) => {
+test("the old /map address opens the page's map view for that project, and the page has the view switch", async (t) => {
   const { fx, flags } = setup();
   const { get } = await open(t, fx, flags);
   assert.equal((await get("/map?project=nope")).status, 400);
-  assert.match((await get("/")).body, /href="\/map\?project=[^"]+"/);
+  const page = (await get("/")).body;
+  const key = JSON.parse(/, P = ("[^"]*")/.exec(page)[1]);
+  const r = await get(`/map?project=${encodeURIComponent(key)}`);
+  assert.equal(r.status, 302);
+  assert.equal(r.headers.location, `/?project=${encodeURIComponent(key)}&view=map`);
+  for (const v of ["text", "split", "map"]) assert.match(page, new RegExp(`data-view="${v}"`));
+  assert.match(page, /<aside class="pane" id="pane"/);
 });

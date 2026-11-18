@@ -100,7 +100,7 @@ test("the run refuses the real Claude folder, a work folder under home, and prob
 
 test("a search that reaches outside the arm, by a relative pattern, a glob, \"..\" or a symbolic link, voids the answer", () => {
   const outside = (env) => { const s = setup(); assert.equal(s.go(env, ["--limit", "1"]).status, 0); return s.results()[0]; };
-  for (const env of [{ FAKE_GLOB: "../../elsewhere/*.md" }, { FAKE_GREP_GLOB: "../*.md" }, { FAKE_GLOB: "/etc/*.conf" }, { FAKE_GLOB: "**/../../../elsewhere/*.md" }, { FAKE_TOOL_USE: "Bash" }]) {
+  for (const env of [{ FAKE_GLOB: "../../elsewhere/*.md" }, { FAKE_GREP_GLOB: "../*.md" }, { FAKE_GLOB: "/etc/*.conf" }, { FAKE_GLOB: "**/../../../elsewhere/*.md" }, { FAKE_GLOB: "{..,x}/{..,y}/elsewhere/*.md" }, { FAKE_TOOL_USE: "Bash" }]) {
     const r = outside(env);
     assert.equal(r.status, "void", JSON.stringify(env));
   }
@@ -216,9 +216,9 @@ test("the judge bundle hides which arm each answer came from; the report groups 
   assert.doesNotMatch(md, /memory-archive|consolidate\//, "where sleep put a file would say which arm it is");
   // Claude quotes the folder without the copy's path in front, too.
   const q = setup();
-  assert.equal(q.go({ FAKE_ANSWER: "Per memory/memory-archive/old_flow.md, cheques." }).status, 0);
+  assert.equal(q.go({ FAKE_ANSWER: "Per memory/memory-archive/old_flow.md and memory\\consolidate\\x.md, cheques." }).status, 0);
   assert.equal(q.score(["bundle", "--dir", q.dir]).status, 0);
-  assert.doesNotMatch(fs.readFileSync(path.join(q.dir, "judge", "bundle.md"), "utf8"), /memory-archive/);
+  assert.doesNotMatch(fs.readFileSync(path.join(q.dir, "judge", "bundle.md"), "utf8"), /memory-archive|consolidate[\\/]/i);
   fs.writeFileSync(path.join(s.dir, "judge", "verdicts.json"), JSON.stringify(Object.fromEntries(Object.keys(key).map((id) => [id, { pass: true }]))));
   r = s.score(["report", "--dir", s.dir]);
   assert.equal(r.status, 0, r.stderr);

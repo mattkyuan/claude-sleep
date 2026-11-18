@@ -44,10 +44,14 @@ test("the served page needs the key, then a cookie, and runs only its own nonce-
   const cookie = enter.headers["set-cookie"][0].split(";")[0];
   const page = await req("GET", "/", { headers: { Cookie: cookie } });
   assert.equal(page.status, 200);
-  const nonce = /script-src 'nonce-([^']+)'/.exec(page.headers["content-security-policy"])[1];
-  const scripts = [...page.body.matchAll(/<script([^>]*)>/g)];
-  assert.equal(scripts.length, 1);
-  assert.ok(scripts[0][1].includes(`nonce="${nonce}"`));
+  const csp = page.headers["content-security-policy"];
+  const nonce = /script-src 'self' 'nonce-([^']+)'/.exec(csp)[1];
+  assert.doesNotMatch(csp, /https?:|unsafe-eval/);
+  const scripts = [...page.body.matchAll(/<script([^>]*)>/g)].map((m) => m[1]);
+  const run = scripts.filter((a) => !a.includes('type="application/json"'));
+  assert.equal(run.length, 2, "the page script and the map module");
+  for (const a of run) assert.ok(a.includes(`nonce="${nonce}"`), a);
+  assert.ok(!scripts.some((a) => /\ssrc=/.test(a)), "no script loads from a src");
   for (const name of ["beta.md", "gamma.md", "eps.md"]) assert.match(page.body, new RegExp(`data-pick value="${name.replace(".", "\\.")}"`));
 });
 

@@ -70,7 +70,8 @@ function pathsOf(tool, cwd) {
   const fixed = (base, pat) => path.resolve(base, pat.split(/[*?[{]/)[0] || ".");
   const fields = { Read: ["file_path"], Grep: ["path", "glob"], Glob: ["path", "pattern"] }[tool.name];
   if (!fields) return [`${tool.name} (not an allowed tool)`];
-  const up = fields.filter((k) => typeof i[k] === "string" && i[k].split(/[\\/]/).includes(".."));
+  // ".." between separators or inside a brace alternative ({..,x}) climbs out of the folder.
+  const up = fields.filter((k) => typeof i[k] === "string" && /(^|[\\/{,])\.\.($|[\\/},])/.test(i[k]));
   if (up.length) return [`${tool.name} ${up.join(", ")} uses ".."`];
   if (tool.name === "Read") return [abs(i.file_path ?? "")];
   const base = abs(i.path ?? ".");
