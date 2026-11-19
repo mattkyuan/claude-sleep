@@ -1,6 +1,6 @@
 # Plan: Consolidate with Claude, see the difference, apply (2026-11-17)
 
-Status: built 2026-11-17 (S1 to S6), local only; verified with the fake claude on scratch copies, not yet against a real Claude run. Mocks: `out/mock-consolidate.html`, `out/mock-3d-flow.html`, `out/mock-memory-md.html` (local, not committed).
+Status: built 2026-11-17 (S1 to S6), local only. Verified with the fake claude on scratch copies, then on 2026-11-18 by a real Consolidate run on a scratch copy of a real memory folder (60 drafts from 136 sources). Mocks: `out/mock-*.html` (local, not committed).
 
 One flow on the served page: look, ask Claude to consolidate, see what changed (numbers, side by side, 3D), apply what you like, then tighten MEMORY.md. Claude always runs with no tools; the server checks every answer and only the command line changes files.
 

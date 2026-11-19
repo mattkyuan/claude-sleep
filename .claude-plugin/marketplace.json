@@ -1,6 +1,9 @@
 {
   "name": "claude-sleep",
-  "owner": { "name": "Matthew Yuan" },
+  "description": "Sleep: memory upkeep for Claude Code.",
+  "owner": {
+    "name": "Matthew Yuan"
+  },
   "plugins": [
     {
       "name": "sleep",

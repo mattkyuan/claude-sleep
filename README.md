@@ -8,7 +8,24 @@ Every memory file is in one of three places:
 - **Consolidate:** unused feedback, still searchable, waiting to be merged into fewer, sharper memories.
 - **Archive:** retained, but not typically accessed. Unused project memories go here, and any file can be restored.
 
-Early: the command line, the `/sleep` skill and scheduling work.
+![The review page: merge drafts on the left, the memory folder in 3D on the right](docs/img/split-view.png)
+
+Status: v0.1.0, early. The command line, the `/sleep` skill, the review page and scheduling work, and a before-and-after eval found no harm (see [How well it works](#how-well-it-works)).
+
+## Safety
+
+- Everything runs on your machine. Nothing is sent anywhere except what you ask Claude to merge or tighten, through your own `claude` command on your Claude plan. No dependencies.
+- Nothing changes until you apply it. Before and after every change, sleep commits the memory folder to its own git history, and `sleep undo` takes back a whole step.
+- Files are moved, never deleted, unless you set `--purge-after`. Feedback memories are never purged.
+- When sleep asks Claude to merge, Claude gets no tools; the server checks every draft before writing it.
+
+## Try it on a made-up folder
+
+```bash
+node examples/demo.mjs
+```
+
+This builds a memory folder for an invented recipe app, with session logs, in your temp folder, and prints two commands: a report, and the review page with a canned stand-in for Claude, so Consolidate runs offline and costs nothing. Your own `~/.claude` is not touched. The screenshot above is this demo.
 
 ## Install
 
@@ -66,7 +83,7 @@ node sleep.mjs archive --apply --project ~/code/my-project
 | `merged --into <file> <queued>...` | Records a merge the skill wrote: archives the sources and points their links at the merged file |
 | `index-apply --changes <file.json>` | Applies line changes to MEMORY.md (and lines added to its hubs) that the served page proposed, after checking them again, in one commit |
 | `review --serve [--port N]` | The same page on 127.0.0.1, where you decide: tick or untick each move and each merge draft, Move all or Keep all per hub, then one Apply moves the files and merges the ticked drafts; leave Claude a note to redo a draft. A picker at the top switches to any other project with memory. The address carries a private key; every action is checked against sleep's own plan and runs the command line, so it is committed and can be undone. |
-| `open [--stop]` | Start the served page in the background, or reuse it, and open it in your browser. It stops by itself after 2 hours unused. See "Consolidate with Claude" below. |
+| `open [--stop]` | Start the served page in the background, or reuse it, and open it in your browser. It stops by itself after 2 hours unused. See "Consolidate with Claude" above. |
 | 3D map | On the served page, the map sits beside the text (Split), or fills the window (Map). It draws every memory file on its floor (MEMORY.md, Keep, Consolidate, Archive) with its links, in four steps: the folder now, the moves, Claude's drafts clustered by topic beside the files they replace, and the folder once applied. It follows your ticks, so Applied shows what Apply will do. Hover a row to find its sphere; click a sphere to open its row. The step follows the section you are reading. Read only. |
 | `projects [--json]` | Every project with memory, with its folder and file count. Memory is per project, so this is the way to find the others. |
 | `review [--open]` | A local page with every proposed move, its evidence, each link edit as before and after, and merge drafts beside their sources. Changes nothing. An `archive` dry run writes one too. |
@@ -114,9 +131,14 @@ A file is used in a session when its text comes back in a tool result, whatever 
 
 Every command appends a line to `sleep/stats.jsonl`. `sleep stats` turns that into a trend and an error rate: a file sleep archived and you restored, or one the agent read again from the archive, counts as a mistake. It can't tell whether the agent got better; only fewer repeated mistakes would show that.
 
-To check whether Claude still applies its memory after a run, `eval/` holds a before-and-after harness: task prompts run with `claude -p` on your subscription against scratch copies of the memory folder, scored against bars fixed in advance. See [docs/plans/2026-11-17-eval.md](docs/plans/2026-11-17-eval.md). Probes hold memory content, so keep them in `out/eval/`, which git ignores.
+To check whether Claude still applies its memory after a run, `eval/` holds a before-and-after harness: task prompts run with `claude -p` on your subscription against scratch copies of the memory folder, scored by blind judges against bars fixed in advance. Probes hold memory content, so keep them in `out/eval/`, which git ignores.
 
-Everything stays on your machine. No dependencies.
+Result so far, on one real memory folder of about 800 files, with Sonnet:
+
+- **No regression found.** On 12 tasks that each needed a fact sleep had merged into another file, Claude passed 25.0% of 120 answers before sleep and 25.8% after: +0.8 points, 95% interval -11.7 to +12.5. No merged fact was lost from the files.
+- **The limit:** Claude almost never opened the file holding the fact, in either arm (0 and 1 reads of 120), so retrieval of merged files was barely tested. The run shows sleep did no harm on these tasks, not that merged memories are easier to find.
+
+Details, the bars and both runs: [docs/plans/2026-11-17-eval.md](docs/plans/2026-11-17-eval.md).
 
 ## License
 

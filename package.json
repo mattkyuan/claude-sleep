@@ -3,8 +3,40 @@
   "version": "0.1.0",
   "description": "Memory upkeep for Claude Code: see which memories are used, check the folder, archive what is not.",
   "license": "MIT",
+  "author": "Matthew Yuan",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mattkyuan/claude-sleep.git"
+  },
+  "homepage": "https://github.com/mattkyuan/claude-sleep#readme",
+  "bugs": "https://github.com/mattkyuan/claude-sleep/issues",
+  "keywords": [
+    "claude-code",
+    "memory",
+    "auto-memory",
+    "context"
+  ],
   "type": "module",
-  "bin": { "claude-sleep": "sleep.mjs" },
-  "engines": { "node": ">=18" },
-  "scripts": { "test": "node --test" }
+  "bin": {
+    "claude-sleep": "sleep.mjs"
+  },
+  "files": [
+    "sleep.mjs",
+    "lib/",
+    "vendor/",
+    "skills/",
+    "examples/",
+    ".claude-plugin/",
+    "docs/best-practices.md",
+    "docs/design.md",
+    "docs/merge-rules.md",
+    "LICENSE",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
 }
