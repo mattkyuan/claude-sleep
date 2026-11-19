@@ -94,12 +94,14 @@ for (let d = 1; d <= 25; d += 4) session(d, ["MEMORY.md", ...used.filter((_, i) 
 session(3, ["MEMORY.md", ...used]);
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const cli = path.relative(process.cwd(), path.join(here, "..", "sleep.mjs")) || "sleep.mjs";
-const canned = path.relative(process.cwd(), path.join(here, "demo-claude.mjs"));
+// Absolute and quoted: sleep runs the stand-in from an empty folder, so a relative path would not resolve.
+const q = (p) => `'${p.replace(/'/g, `'\\''`)}'`;
+const cli = q(path.join(here, "..", "sleep.mjs"));
+const canned = q(path.join(here, "demo-claude.mjs"));
 console.log(`Demo memory: ${memDir}
 ${Object.keys(files).length} files, ${n} sessions. Try:
 
-  CLAUDE_CONFIG_DIR=${claude} node ${cli} report --project ${project}
-  CLAUDE_CONFIG_DIR=${claude} SLEEP_CLAUDE=${canned} node ${cli} review --serve --project ${project}
+  CLAUDE_CONFIG_DIR=${q(claude)} node ${cli} report --project ${q(project)}
+  CLAUDE_CONFIG_DIR=${q(claude)} SLEEP_CLAUDE=${canned} node ${cli} review --serve --project ${q(project)}
 
 The second serves the page with a canned stand-in for Claude, so Consolidate runs offline and costs nothing.`);

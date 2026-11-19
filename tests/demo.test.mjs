@@ -11,12 +11,19 @@ import { ROOT, CLI, serve } from "./helpers.mjs";
 const DEMO = path.join(ROOT, "examples", "demo.mjs");
 const CANNED = path.join(ROOT, "examples", "demo-claude.mjs");
 
+// A space in the folder name checks that the printed commands are quoted.
 function build() {
-  const dir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "sleep-demo-test-")), "demo");
-  const r = spawnSync(process.execPath, [DEMO, dir], { encoding: "utf8" });
+  const dir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "sleep-demo-test-")), "my demo");
+  const r = spawnSync(process.execPath, [DEMO, dir], { encoding: "utf8", cwd: os.tmpdir() });
   assert.equal(r.status, 0, r.stderr);
-  return { dir, claude: path.join(dir, "claude"), project: path.join(dir, "recipe-box") };
+  return { dir, claude: path.join(dir, "claude"), project: path.join(dir, "recipe-box"), printed: r.stdout };
 }
+
+// The values the demo prints, read back the way a shell would ('...' with '\'' for a quote).
+const printedVar = (out, name) => {
+  const m = new RegExp(`${name}='((?:[^']|'\\\\'')*)'`).exec(out);
+  return m && m[1].replace(/'\\''/g, "'");
+};
 
 test("the demo builds a folder with archive candidates, a queue and passing checks", () => {
   const d = build();
@@ -39,7 +46,10 @@ test("the demo refuses to replace a folder it did not make", () => {
 
 test("the demo's canned Claude merges the queue on the served page", async (t) => {
   const d = build();
-  const s = await serve(t, ["--project", d.project], { claude: d.claude }, { SLEEP_CLAUDE: CANNED });
+  const canned = printedVar(d.printed, "SLEEP_CLAUDE");
+  assert.equal(canned, CANNED, "the demo prints the stand-in's absolute path");
+  assert.equal(printedVar(d.printed, "CLAUDE_CONFIG_DIR"), d.claude);
+  const s = await serve(t, ["--project", d.project], { claude: d.claude }, { SLEEP_CLAUDE: canned });
   assert.equal((await s.act("/consolidate", {})).status, 200);
   let job;
   for (let i = 0; i < 50; i++) {
