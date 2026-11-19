@@ -88,6 +88,9 @@ test("the plugin manifest, marketplace and skill are where Claude Code looks for
   assert.equal(plugin.name, "sleep");
   assert.equal(market.plugins[0].name, "sleep");
   assert.equal(market.plugins[0].source, "./");
+  // The marketplace name is in every public install line (sleep@mattkyuan), so a rename breaks them.
+  assert.equal(market.name, "mattkyuan");
+  assert.deepEqual(market.plugins.map((p) => p.name), ["sleep", "harness-map"]);
   const skill = fs.readFileSync(path.join(root, "skills", "sleep", "SKILL.md"), "utf8");
   const fm = /^---\n([\s\S]*?)\n---\n/.exec(skill)[1];
   assert.match(fm, /^name: sleep$/m);

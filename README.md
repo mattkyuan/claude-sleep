@@ -38,8 +38,10 @@ Or install it as a Claude Code plugin, which adds the `/sleep` skill:
 
 ```text
 /plugin marketplace add mattkyuan/claude-sleep
-/plugin install sleep@claude-sleep
+/plugin install sleep@mattkyuan
 ```
+
+The same marketplace has [claude-harness-map](https://github.com/mattkyuan/claude-harness-map), a 3D map of what Claude Code loads into context: `/plugin install harness-map@mattkyuan`.
 
 Then run `/sleep` in any project for a report. Nothing moves until you say so. Requires Node 18 or later and git. Tested on macOS and Linux; Windows is untested (the memory folder names and scheduling there are unverified). On Linux a file's age is its creation time where the filesystem records one, and its last edit otherwise.
 

@@ -1,6 +1,6 @@
 {
-  "name": "claude-sleep",
-  "description": "Sleep: memory upkeep for Claude Code.",
+  "name": "mattkyuan",
+  "description": "Matthew Yuan's Claude Code plugins: sleep (memory upkeep) and harness-map (a 3D map of what loads into context).",
   "owner": {
     "name": "Matthew Yuan"
   },
@@ -10,6 +10,16 @@
       "source": "./",
       "description": "Memory upkeep for Claude Code: see which memories are used, archive what is not, merge unused lessons.",
       "version": "0.1.1",
+      "category": "productivity"
+    },
+    {
+      "name": "harness-map",
+      "source": {
+        "source": "github",
+        "repo": "mattkyuan/claude-harness-map"
+      },
+      "description": "A 3D map of what Claude Code or Codex loads into context on the first turn, and where each piece comes from.",
+      "version": "0.1.0",
       "category": "productivity"
     }
   ]
