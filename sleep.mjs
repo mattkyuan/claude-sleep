@@ -11,7 +11,7 @@ import { loadMoves, saveMoves, activeArchived, planMoves, applyMoves, heldLinks,
 import { ensureRepo, commitAll } from "./lib/git.mjs";
 import { loadSteps, saveSteps, snapshot, movesDiff, rewindMoves, nextGroup, inHistory, revertAll, datesOf, movedBy, putDatesBack } from "./lib/undo.mjs";
 import { record, summarize } from "./lib/stats.mjs";
-import { parseSchedule, describe, command, plist, cronLine, install, remove, labelFor } from "./lib/schedule.mjs";
+import { parseSchedule, describe, command, plist, cronLine, install, remove, labelFor, pluginInstall, launcherSource } from "./lib/schedule.mjs";
 import { fileURLToPath } from "node:url";
 import { frontmatter } from "./lib/memory.mjs";
 import { reviewHtml, pickerHtml } from "./lib/review.mjs";
@@ -417,9 +417,13 @@ async function schedule(flags) {
     return;
   }
   const s = parseSchedule(flags);
-  const args = command(s, { cli: CLI, target: loc.target, state: loc.state });
-  const log = path.join(loc.state, "schedule.log");
   fs.mkdirSync(loc.state, { recursive: true });
+  // From a plugin, the job runs a launcher that follows plugin updates; from a checkout, the checkout itself.
+  const plugin = pluginInstall(CLI), launcher = path.join(loc.state, "run-sleep.mjs");
+  if (plugin) fs.writeFileSync(launcher, launcherSource(CLI, plugin));
+  else fs.rmSync(launcher, { force: true });
+  const args = command(s, { cli: plugin ? launcher : CLI, target: loc.target, state: loc.state });
+  const log = path.join(loc.state, "schedule.log");
   if (platform === "darwin") {
     const file = install(label, plist(label, args, s, log));
     saveConfig(loc.state, { ...cfg, schedule: s });
