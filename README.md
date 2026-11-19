@@ -19,7 +19,22 @@ On one real folder of 833 memory files, 409 had gone unused for 60 days, and Cla
 
 ![Demo review page: merge drafts on the left, the memory folder in 3D on the right](docs/screenshot.jpg)
 
-## Set it up in Claude Code
+## Set it up with Claude Code or Codex
+
+Paste this into a Claude Code or Codex session started in the project whose memory you want to check:
+
+```text
+Clone https://github.com/mattkyuan/claude-sleep to ~/tools/claude-sleep (or git pull), then run:
+node ~/tools/claude-sleep/sleep.mjs report --project "$PWD"
+Show me its summary line and the report it writes. Do not move or change any memory file.
+```
+
+- **Review page, where you pick moves and merges:** ask for `node ~/tools/claude-sleep/sleep.mjs open --project "$PWD"`. It starts the page in the background, opens it in your browser and returns at once, so it works from Codex too. The address holds a private key and is never printed; `sleep.mjs open --stop` stops it, or it stops by itself after 2 hours unused.
+- **Consolidate with Claude** on the page runs `claude -p`, so it needs Claude Code installed and signed in, even when you started from Codex.
+- **Codex:** cloning needs network access and writing to `~/tools` is outside the project, so Codex may ask you to approve both.
+- **Windows:** `~` is not expanded for `node` in PowerShell, so ask the agent to use the full path of your home folder.
+
+Or install it as a Claude Code plugin, which adds the `/sleep` skill:
 
 ```text
 /plugin marketplace add mattkyuan/claude-sleep
