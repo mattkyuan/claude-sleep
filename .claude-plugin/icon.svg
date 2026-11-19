@@ -1,1 +1,10 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#1b1b22"/><path d="M40 12a20 20 0 1 0 12 30A16 16 0 0 1 40 12z" fill="#e8913a"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <title>claude-sleep</title>
+  <defs><mask id="m"><rect width="128" height="128" fill="#fff"/><circle cx="72" cy="22" r="13" fill="#000"/></mask></defs>
+  <g stroke-linejoin="round" stroke-width="3">
+    <path d="M64 76 L112 96 L64 116 L16 96 Z" fill="#c9785a" stroke="#8f4f37"/>
+    <path d="M64 44 L112 64 L64 84 L16 64 Z" fill="#b48ce8" stroke="#7d58b3"/>
+    <path d="M64 12 L112 32 L64 52 L16 32 Z" fill="#8a93a6" stroke="#5d6577"/>
+  </g>
+  <circle cx="62" cy="30" r="15" fill="#f2a65a" mask="url(#m)"/>
+</svg>

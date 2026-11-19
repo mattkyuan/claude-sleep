@@ -1,23 +1,32 @@
-# claude-sleep
+<p align="center"><img src="docs/brand/icon.svg" width="112" alt=""></p>
+<h1 align="center">claude-sleep</h1>
+<p align="center"><em>keep what your coding agent remembers small, sharp and findable</em></p>
 
-Memory upkeep for Claude Code. It shows which memory files the agent actually uses, checks the folder against [best practices](docs/best-practices.md), and moves what goes unused out of the way. Every run writes a report, and every change is a git commit you can undo.
+<p align="center">
+  <img src="https://img.shields.io/badge/node-%E2%89%A518-f2a65a" alt="node 18 or later">
+  <img src="https://img.shields.io/badge/dependencies-none-6cc4a1" alt="no dependencies">
+  <img src="https://img.shields.io/badge/runs-locally-b48ce8" alt="runs locally">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-7d8cff" alt="MIT license"></a>
+</p>
 
-Every memory file is in one of three places:
+claude-sleep reads **Claude Code's memory folder** against **your session logs** to see which memories the agent actually uses, so you can:
 
-- **Keep:** memory Claude reads as usual.
-- **Consolidate:** unused feedback, still searchable, waiting to be merged into fewer, sharper memories.
-- **Archive:** retained, but not typically accessed. Unused project memories go here, and any file can be restored.
+- See which memory files get read, and which nothing has touched in 60 days.
+- Archive stale project notes, and have Claude merge repeated lessons into fewer files that you approve one by one.
+- Take any step back: every change is a git commit in the memory folder.
 
-![The review page: merge drafts on the left, the memory folder in 3D on the right](docs/img/split-view.png)
+On one real folder of 833 memory files, 409 had gone unused for 60 days, and Claude merged 136 of them into 60.
 
-Status: v0.1.0, early. The command line, the `/sleep` skill, the review page and scheduling work, and a before-and-after eval found no harm (see [How well it works](#how-well-it-works)).
+![Demo review page: merge drafts on the left, the memory folder in 3D on the right](docs/screenshot.jpg)
 
-## Safety
+## Set it up in Claude Code
 
-- Everything runs on your machine. Nothing is sent anywhere except what you ask Claude to merge or tighten, through your own `claude` command on your Claude plan. No dependencies.
-- Nothing changes until you apply it. Before and after every change, sleep commits the memory folder to its own git history, and `sleep undo` takes back a whole step.
-- Files are moved, never deleted, unless you set `--purge-after`. Feedback memories are never purged.
-- When sleep asks Claude to merge, Claude gets no tools; the server checks every draft before writing it.
+```text
+/plugin marketplace add mattkyuan/claude-sleep
+/plugin install sleep@claude-sleep
+```
+
+Then run `/sleep` in any project for a report. Nothing moves until you say so. Requires Node 18 or later and git. Tested on macOS and Linux; Windows is untested (the memory folder names and scheduling there are unverified). On Linux a file's age is its creation time where the filesystem records one, and its last edit otherwise.
 
 ## Try it on a made-up folder
 
@@ -27,16 +36,20 @@ node examples/demo.mjs
 
 This builds a memory folder for an invented recipe app, with session logs, in your temp folder, and prints two commands: a report, and the review page with a canned stand-in for Claude, so Consolidate runs offline and costs nothing. Your own `~/.claude` is not touched. The screenshot above is this demo.
 
-## Install
+## Where memories go
 
-In Claude Code:
+Every memory file is in one of three places, the three floors of the map:
 
-```
-/plugin marketplace add mattkyuan/claude-sleep
-/plugin install sleep@claude-sleep
-```
+- **Keep:** memory Claude reads as usual.
+- **Consolidate:** unused feedback, still searchable, waiting to be merged into fewer, sharper memories.
+- **Archive:** retained, but not typically accessed. Unused project memories go here, and any file can be restored.
 
-Then run `/sleep` in any project. Requires Node 18 or later and git. Tested on macOS and Linux; Windows is untested (the memory folder names and scheduling there are unverified). On Linux a file's age is its creation time where the filesystem records one, and its last edit otherwise.
+## Safety
+
+- Everything runs on your machine. Nothing is sent anywhere except what you ask Claude to merge or tighten, through your own `claude` command on your Claude plan. No dependencies.
+- Nothing changes until you apply it. Before and after every change, sleep commits the memory folder to its own git history, and `sleep undo` takes back a whole step.
+- Files are moved, never deleted, unless you set `--purge-after`. Feedback memories are never purged.
+- When sleep asks Claude to merge, Claude gets no tools; the server checks every draft before writing it.
 
 ## Use the skill
 

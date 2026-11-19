@@ -59,6 +59,27 @@ const notes = [
   ["api_v1_shutdown.md", "project", "API v1 shutdown", "API v1 was turned off on 2025-06-30. Nothing calls it now.", 150, false],
   ["beta_testers.md", "project", "Beta tester group", "The 2024 beta group of 12 testers was closed after launch.", 260, false],
 ];
+// A realistic folder is mostly notes the agent reads: one per feature, all linked from a hub.
+const features = ["shopping_list", "meal_planner", "nutrition_panel", "unit_converter", "recipe_import", "print_view", "comments", "ratings", "collections", "follow_cooks", "push_alerts", "email_digest", "pantry", "cook_mode", "timers", "serving_scaler", "tags", "search_filters", "recipe_editor", "photo_upload", "share_links", "offline_mode", "account_export", "premium_plans", "onboarding", "moderation", "reports_queue", "admin_panel", "translations", "accessibility"];
+for (const [i, f] of features.entries()) {
+  const label = f.replace(/_/g, " ");
+  notes.push([`feature_${f}.md`, "project", `How ${label} works`, `${label[0].toUpperCase() + label.slice(1)} lives in \`src/${f}/\`. Its API routes start with \`/api/${f.replace(/_/g, "-")}\`, and its tests are in \`tests/${f}.test.ts\`.`, 40 + (i % 50), true]);
+}
+notes.push(["features_hub.md", "reference", "Features hub", features.map((f) => `- [${f.replace(/_/g, " ")}](feature_${f}.md)`).join("\n"), 100, true]);
+// More lessons nobody looked up, in pairs that say the same thing, under a third hub.
+const lessons = [
+  ["api_errors", "API errors use one shape", "Every API error returns `{ error, code }`. A bare string broke the mobile app in v2.4.", "Errors from the API keep the `{ error, code }` shape; PR #88 returned a string and the app crashed."],
+  ["api_pagination", "Lists are paginated by cursor", "List endpoints page by cursor, never by offset; offsets skipped recipes in PR #91.", "Use a cursor for every list endpoint. Offset paging dropped items while new recipes arrived."],
+  ["api_rate_limits", "Rate limits per user", "The API limits each user to 60 requests a minute; tests must not hit the real limiter.", "Stub the rate limiter in tests. The real one (60 a minute) made CI fail in PR #95."],
+  ["api_versions", "Breaking changes need a version", "A breaking API change ships under a new version path, as v2 did on 2025-06-30.", "Never change a response shape in place; add a version, as with v2."],
+];
+for (const [i, [k, desc, a, b]] of lessons.entries()) {
+  notes.push([`${k}.md`, "feedback", desc, a, 75 + i * 3, false]);
+  notes.push([`${k}_again.md`, "feedback", `${desc} (again)`, b, 70, false]);
+}
+notes.push(["api_hub.md", "reference", "API hub", lessons.map(([k, d]) => `- [${d}](${k}.md)`).join("\n"), 100, true]);
+// Old sprint notes nobody reads any more, headed for Archive.
+for (let w = 1; w <= 10; w++) notes.push([`sprint_2025_w${String(w * 4).padStart(2, "0")}.md`, "project", `Sprint notes, 2025 week ${w * 4}`, `Goals for 2025 week ${w * 4}: ship ${features[w * 2]} fixes and close ${w + 3} bugs. Done.`, 180 + w * 10, false]);
 for (const [name, type, desc, body, age] of notes) write(name, mem(name.slice(0, -3), type, desc, body), age);
 write("MEMORY.md", [
   "# Recipe Box memory",
@@ -67,7 +88,7 @@ write("MEMORY.md", [
   "- [Run migrations by hand](db_migrations.md)",
   "- [Photos go through the CDN](image_cdn.md)",
   "- [Search index is nightly](search_index.md)",
-  "- [Testing »](tests_hub.md) [Frontend »](ui_hub.md)",
+  "- [Testing »](tests_hub.md) [Frontend »](ui_hub.md) [API »](api_hub.md) [Features »](features_hub.md)",
   "- [Old payment flow](old_payment_flow.md)",
   "",
 ].join("\n"), 2);

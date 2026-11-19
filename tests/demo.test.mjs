@@ -31,8 +31,10 @@ test("the demo builds a folder with archive candidates, a queue and passing chec
   assert.equal(r.status, 0, r.stderr);
   const rep = JSON.parse(r.stdout);
   assert.ok(rep.usage.coverageDays >= 60, "a full window of usage on record");
-  assert.deepEqual(rep.candidates.map((c) => c.name).sort(), ["api_v1_shutdown.md", "beta_testers.md", "holiday_banner.md", "launch_checklist_2025.md"]);
-  assert.equal(rep.consolidate.length, 10);
+  assert.equal(rep.files.length, 72);
+  assert.equal(rep.candidates.length, 14);
+  assert.ok(rep.candidates.every((c) => /^(sprint_2025_w\d\d|api_v1_shutdown|beta_testers|holiday_banner|launch_checklist_2025)\.md$/.test(c.name)), "only old project notes archive");
+  assert.equal(rep.consolidate.length, 18);
   assert.deepEqual(rep.checks.filter((c) => c.status === "fail").map((c) => c.id), []);
 });
 
@@ -58,7 +60,7 @@ test("the demo's canned Claude merges the queue on the served page", async (t) =
     await new Promise((r) => setTimeout(r, 100));
   }
   assert.equal(job.state, "done");
-  assert.match(job.message, /wrote 4 merged memories/);
+  assert.match(job.message, /read 18 memories and wrote 8 merged memories/);
   assert.doesNotMatch(job.message, /failed/);
 });
 
