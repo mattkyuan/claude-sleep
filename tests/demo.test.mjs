@@ -61,3 +61,11 @@ test("the demo's canned Claude merges the queue on the served page", async (t) =
   assert.match(job.message, /wrote 4 merged memories/);
   assert.doesNotMatch(job.message, /failed/);
 });
+
+test("--help and -h print the usage, as the usage itself says", () => {
+  for (const a of [["--help"], ["-h"], ["help"], []]) {
+    const r = spawnSync(process.execPath, [CLI, ...a], { encoding: "utf8" });
+    assert.equal(r.status, 0, `${a.join(" ")}: ${r.stderr}`);
+    assert.match(r.stdout, /^sleep: memory upkeep/);
+  }
+});

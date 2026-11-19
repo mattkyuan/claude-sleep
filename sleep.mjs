@@ -999,7 +999,7 @@ function undo(flags) {
 
 async function main() {
   const { cmd, args, flags } = parse(process.argv.slice(2));
-  if (!cmd || cmd === "help" || flags.help) { process.stdout.write(HELP); return; }
+  if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h" || flags.help) { process.stdout.write(HELP); return; }
   if (!["restore", "merged"].includes(cmd) && args.length) throw new Error(`Unexpected argument: ${args[0]}`);
   if (cmd === "report") return report(flags);
   if (cmd === "archive") return archive(flags);
