@@ -3,12 +3,20 @@ name: sleep
 description: Memory upkeep for Claude Code's auto memory. Shows which memory files the agent actually uses, checks the folder against best practices, archives memories that go unused, and merges unused feedback memories into fewer, sharper ones. Use when the user asks to tidy, clean up, audit, consolidate or "sleep" their memory, or asks which memories are used.
 argument-hint: "[report | open | archive | consolidate [topic] | restore <file> | undo | schedule | stats]"
 allowed-tools:
-  - Bash(node "${CLAUDE_PLUGIN_ROOT}/sleep.mjs" *)
+  - Bash(node "${CLAUDE_PLUGIN_ROOT}/sleep.mjs" report)
+  - Bash(node "${CLAUDE_PLUGIN_ROOT}/sleep.mjs" archive)
+  - Bash(node "${CLAUDE_PLUGIN_ROOT}/sleep.mjs" queue --json)
+  - Bash(node "${CLAUDE_PLUGIN_ROOT}/sleep.mjs" review)
+  - Bash(node "${CLAUDE_PLUGIN_ROOT}/sleep.mjs" projects)
+  - Bash(node "${CLAUDE_PLUGIN_ROOT}/sleep.mjs" stats)
+  - Bash(node "${CLAUDE_PLUGIN_ROOT}/sleep.mjs" schedule)
+  - Bash(node "${CLAUDE_PLUGIN_ROOT}/sleep.mjs" undo --list)
+  - Bash(node "${CLAUDE_PLUGIN_ROOT}/sleep.mjs" open)
+  - Bash(node "${CLAUDE_PLUGIN_ROOT}/sleep.mjs" open --stop)
+  - Edit(~/.claude/projects/**/sleep/drafts/**)
   - Read
   - Glob
   - Grep
-  - Write
-  - Edit
   - AskUserQuestion
 ---
 
@@ -20,7 +28,7 @@ A bundled command line does everything that has a right answer: counting use, ch
 node "${CLAUDE_PLUGIN_ROOT}/sleep.mjs" <command>
 ```
 
-It reads the memory of the project in the current folder (a worktree maps to its main checkout). Memory is per project: if the user names another project, or the current folder has no memory, run `projects` to list every project with memory, and pass `--project <folder>` (or `--key <key>` when the folder is unknown) to each command. The user asked for: $ARGUMENTS
+Commands that only read or show (`report`, `archive` without `--apply`, `queue --json`, `review`, `projects`, `stats`, `schedule` alone, `undo --list`, `open`) run without a prompt. Anything that changes memory or the schedule asks the user's permission each time, as do commands with extra flags such as `--project`. Writing merge drafts in the drafts folder needs no prompt. It reads the memory of the project in the current folder (a worktree maps to its main checkout). Memory is per project: if the user names another project, or the current folder has no memory, run `projects` to list every project with memory, and pass `--project <folder>` (or `--key <key>` when the folder is unknown) to each command. The user asked for: $ARGUMENTS
 
 Pick the flow from the arguments. With none, run **report**, then offer archive or consolidate if there is anything to do.
 

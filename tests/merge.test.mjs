@@ -97,5 +97,15 @@ test("the plugin manifest, marketplace and skill are where Claude Code looks for
   assert.match(fm, /^description: .{40,}/m);
   // The skill runs the bundled CLI, never a copy somewhere else.
   assert.match(skill, /node "\$\{CLAUDE_PLUGIN_ROOT\}\/sleep\.mjs"/);
+  // What runs without a prompt only reads or shows: no wildcard that could add a flag (--apply, --state, --out), no
+  // command that changes memory or the schedule, and file writes only to merge drafts.
+  const grants = [...fm.matchAll(/^  - (.+)$/gm)].map((m) => m[1]);
+  const READ_ONLY = ["report", "archive", "queue --json", "review", "projects", "stats", "schedule", "undo --list", "open", "open --stop"];
+  for (const g of grants) {
+    assert.ok(!g.includes("*") || /^Edit\(~\/\.claude\/projects\/\*\*\/sleep\/drafts\/\*\*\)$/.test(g), `no wildcard outside the drafts folder: ${g}`);
+    const bash = /^Bash\(node "\$\{CLAUDE_PLUGIN_ROOT\}\/sleep\.mjs" (.*)\)$/.exec(g);
+    if (g.startsWith("Bash")) assert.ok(bash && READ_ONLY.includes(bash[1]), `only read-only commands run without a prompt: ${g}`);
+    assert.ok(!/^(Write|Edit)$/.test(g), `no unscoped file writes: ${g}`);
+  }
   assert.ok(!skill.includes("—"), "no em dashes");
 });

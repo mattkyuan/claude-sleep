@@ -1,6 +1,6 @@
 {
   "name": "claude-sleep",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Memory upkeep for Claude Code: see which memories are used, check the folder, archive what is not.",
   "license": "MIT",
   "author": "Matthew Yuan",
