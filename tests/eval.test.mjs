@@ -43,7 +43,11 @@ function setup({ probes = PROBES, freeze = true } = {}) {
   fs.writeFileSync(path.join(dir, "probes.json"), JSON.stringify({ probes }));
   fs.writeFileSync(path.join(dir, "rubric.md"), "Judge only what the answer says.\n");
   const log = path.join(t, "fake.log");
-  const env = (extra = {}) => ({ ...process.env, HOME: home, SLEEP_CLAUDE: FAKE, ANTHROPIC_API_KEY: "sk-should-never-reach-claude", FAKE_LOG: log, ...extra });
+  // The parent's own variables, and a desktop session's, must not reach claude; the fake's knobs pass by name.
+  const env = (extra = {}) => {
+    const e = { ...process.env, HOME: home, SLEEP_CLAUDE: FAKE, ANTHROPIC_API_KEY: "sk-should-never-reach-claude", ANTHROPIC_BASE_URL: "http://127.0.0.1:9", CLAUDE_CODE_CHILD_SESSION: "1", CLAUDE_CODE_SIMPLE: "1", STRAY_VAR: "x", FAKE_LOG: log, ...extra };
+    return { ...e, SLEEP_EVAL_PASS_ENV: Object.keys(e).filter((k) => k.startsWith("FAKE_")).join(",") };
+  };
   const run = (args, extra) => spawnSync(process.execPath, [RUN, ...args], { encoding: "utf8", env: env(extra) });
   const score = (args, extra) => spawnSync(process.execPath, [SCORE, ...args], { encoding: "utf8", env: env(extra) });
   const go = (extra = {}, more = []) => run(["run", "--dir", dir, "--model", "sonnet", "--config", config, "--work", work, "--arm", `A=${A}`, "--arm", `C=${C}`, "--repeats", "2", ...more], extra);
@@ -64,6 +68,8 @@ test("every call runs clean on the subscription, against its own arm's copy, and
     assert.equal(c.env.ANTHROPIC_API_KEY, null, "no API key reaches claude");
     assert.equal(c.env.CLAUDE_CONFIG_DIR, s.config);
     assert.equal(c.env.ENABLE_CLAUDEAI_MCP_SERVERS, "false");
+    for (const k of ["ANTHROPIC_BASE_URL", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_SIMPLE", "STRAY_VAR", "SLEEP_CLAUDE", "SLEEP_EVAL_PASS_ENV"]) assert.ok(!c.keys.includes(k), `${k} reaches claude`);
+    for (const k of ["HOME", "PATH"]) assert.ok(c.keys.includes(k), `${k} missing`);
     for (const f of ["--strict-mcp-config", "--disable-slash-commands"]) assert.ok(c.argv.includes(f), f);
     assert.equal(c.argv[c.argv.indexOf("--tools") + 1], "Read,Grep,Glob");
     assert.equal(c.argv[c.argv.indexOf("--model") + 1], "sonnet");

@@ -87,9 +87,20 @@ function canon(p) {
   try { return path.join(fs.realpathSync(head), tail); } catch { return p; }
 }
 
-function call(bin, arm, probe, model, config, timeout) {
-  const env = { ...process.env, CLAUDE_CONFIG_DIR: config, ENABLE_CLAUDEAI_MCP_SERVERS: "false" };
+// Claude gets only what a login shell would give it, plus the network settings it may need, so nothing from the
+// calling process (a desktop session's CLAUDE_CODE_* and ANTHROPIC_* variables, an API key) changes a call.
+// SLEEP_EVAL_PASS_ENV names extra variables to pass, comma-separated.
+const KEEP = /^(HOME|USER|LOGNAME|PATH|SHELL|TMPDIR|TZ|LANG|LC_\w+|TERM|XDG_\w+|https?_proxy|HTTPS?_PROXY|no_proxy|NO_PROXY|NODE_EXTRA_CA_CERTS|SSL_CERT_(FILE|DIR))$/;
+function cleanEnv(from, config) {
+  const pass = new Set((from.SLEEP_EVAL_PASS_ENV || "").split(",").map((k) => k.trim()).filter(Boolean));
+  const env = {};
+  for (const [k, v] of Object.entries(from)) if (KEEP.test(k) || pass.has(k)) env[k] = v;
   delete env.ANTHROPIC_API_KEY; delete env.ANTHROPIC_AUTH_TOKEN;
+  return { ...env, CLAUDE_CONFIG_DIR: config, ENABLE_CLAUDEAI_MCP_SERVERS: "false" };
+}
+
+function call(bin, arm, probe, model, config, timeout) {
+  const env = cleanEnv(process.env, config);
   const args = ["-p", probe.prompt, "--model", model, "--tools", "Read,Grep,Glob", "--strict-mcp-config", "--disable-slash-commands", "--output-format", "stream-json", "--verbose"];
   const r = spawnSync(bin, args, { cwd: arm.cwd, env, encoding: "utf8", timeout: timeout * 1000, maxBuffer: 64 << 20 });
   const events = (r.stdout || "").split("\n").flatMap((l) => { try { return [JSON.parse(l)]; } catch { return []; } });

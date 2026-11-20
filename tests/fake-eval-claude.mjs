@@ -13,7 +13,7 @@ const argv = process.argv.slice(2);
 const prompt = argv[argv.indexOf("-p") + 1];
 const cwd = fs.realpathSync(process.cwd());
 const memDir = path.join(e.CLAUDE_CONFIG_DIR, "projects", cwd.replace(/[^A-Za-z0-9]/g, "-"), "memory");
-if (e.FAKE_LOG) fs.appendFileSync(e.FAKE_LOG, JSON.stringify({ argv, cwd, env: { ANTHROPIC_API_KEY: e.ANTHROPIC_API_KEY ?? null, CLAUDE_CONFIG_DIR: e.CLAUDE_CONFIG_DIR, ENABLE_CLAUDEAI_MCP_SERVERS: e.ENABLE_CLAUDEAI_MCP_SERVERS } }) + "\n");
+if (e.FAKE_LOG) fs.appendFileSync(e.FAKE_LOG, JSON.stringify({ argv, cwd, env: { ANTHROPIC_API_KEY: e.ANTHROPIC_API_KEY ?? null, CLAUDE_CONFIG_DIR: e.CLAUDE_CONFIG_DIR, ENABLE_CLAUDEAI_MCP_SERVERS: e.ENABLE_CLAUDEAI_MCP_SERVERS }, keys: Object.keys(e).sort() }) + "\n");
 if (e.FAKE_FAIL && prompt.includes(e.FAKE_FAIL)) { process.stderr.write("Rate limited.\n"); process.exit(1); }
 const out = (o) => process.stdout.write(JSON.stringify(o) + "\n");
 out({ type: "system", subtype: "init", cwd, tools: e.FAKE_TOOLS ? e.FAKE_TOOLS.split(",") : ["Glob", "Grep", "Read"], mcp_servers: e.FAKE_MCP ? [{ name: e.FAKE_MCP }] : [], model: e.FAKE_MODEL || "claude-test-1", apiKeySource: e.FAKE_APIKEY || "none", memory_paths: { auto: (e.FAKE_MEMPATH || memDir) + "/" } });
